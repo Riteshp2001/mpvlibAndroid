@@ -25,7 +25,7 @@ ndk-build -j$cores \
 	NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=Android.mk \
 	NDK_APPLICATION_MK="$application_mk" APP_ABI=$abi \
 	NDK_APP_OUT="$builddir" NDK_APP_LIBS_OUT="$builddir/libs" \
-	APP_CFLAGS="$CFLAGS" APP_CPPFLAGS="$CXXFLAGS" APP_LDFLAGS="$LDFLAGS" \
+	APP_CFLAGS="$CFLAGS -fno-fast-math" APP_CPPFLAGS="$CXXFLAGS -fno-fast-math" APP_LDFLAGS="$LDFLAGS" \
 	libshaderc_combined
 
 cd "$builddir"
