@@ -19,13 +19,18 @@ abi=armeabi-v7a
 [[ "$ndk_triple" == "x86_64"* ]] && abi=x86_64
 [[ "$ndk_triple" == "i686"* ]] && abi=x86
 
+# Strip LTO flags for shaderc as ndk-build's static combining/stripping toolchain does not support LLVM bitcode
+shaderc_cflags="${CFLAGS//-flto=thin/}"
+shaderc_cflags="${shaderc_cflags} -fno-fast-math"
+shaderc_ldflags="${LDFLAGS//-flto=thin/}"
+
 # build using the NDK's scripts, but keep object files in our build dir
 cd "$(dirname "$(which ndk-build)")/sources/third_party/shaderc"
 ndk-build -j$cores \
 	NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=Android.mk \
 	NDK_APPLICATION_MK="$application_mk" APP_ABI=$abi \
 	NDK_APP_OUT="$builddir" NDK_APP_LIBS_OUT="$builddir/libs" \
-	APP_CFLAGS="$CFLAGS -fno-fast-math" APP_CPPFLAGS="$CXXFLAGS -fno-fast-math" APP_LDFLAGS="$LDFLAGS" \
+	APP_CFLAGS="$shaderc_cflags" APP_CPPFLAGS="$shaderc_cflags" APP_LDFLAGS="$shaderc_ldflags" \
 	libshaderc_combined
 
 cd "$builddir"
