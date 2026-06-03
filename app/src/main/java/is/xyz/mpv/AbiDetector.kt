@@ -155,6 +155,14 @@ object AbiDetector {
                 extractV9aLibraries(context, cacheDir)
             }
 
+            // Ensure the standard C++ library is loaded into memory first
+            // This prevents strict Android linker namespace issues when loading libplayer.so from an absolute path
+            try {
+                System.loadLibrary("c++_shared")
+            } catch (e: Throwable) {
+                Log.w(TAG, "c++_shared not found via loadLibrary, continuing anyway")
+            }
+
             // Load in dependency order
             val loadOrder = arrayOf(
                 "libavutil.so",
@@ -181,7 +189,7 @@ object AbiDetector {
                 }
             }
             true
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e(TAG, "Failed to load v9a libraries", e)
             false
         }
@@ -196,10 +204,10 @@ object AbiDetector {
         val versionFile = File(cacheDir, "version.txt")
         if (!versionFile.exists()) return false
 
-        // Check version matches current app version
+        // Check version matches current app install time
         val cachedVersion = versionFile.readText().trim()
         val currentVersion = try {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+            context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime.toString()
         } catch (e: Exception) { "" }
 
         return cachedVersion == currentVersion
@@ -230,15 +238,16 @@ object AbiDetector {
                     input.copyTo(output, bufferSize = 65536)
                 }
             }
-            // Libraries must be executable
+            // Libraries must be executable and read-only for Android 14+ DCL rules
             outFile.setExecutable(true, false)
             outFile.setReadable(true, false)
+            outFile.setWritable(false, false)
             Log.d(TAG, "Extracted: $asset (${outFile.length()} bytes)")
         }
 
         // Write version marker
         val currentVersion = try {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
+            context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime.toString()
         } catch (e: Exception) { "unknown" }
         File(cacheDir, "version.txt").writeText(currentVersion)
 
