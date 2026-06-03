@@ -27,17 +27,19 @@ fi
 cpuflags=
 # ARM NEON intrinsics — always enabled for arm64
 [[ "$ndk_triple" == "aarch64"* ]] && cpuflags="$cpuflags -DHAVE_NEON=1"
-# v9a: explicit SVE2 instruction set
+# v9a: explicit SVE2 instruction set (Safe version: matches our buildall.sh flags)
 if [ "${ARM_V9A:-0}" -eq 1 ]; then
-	cpuflags="$cpuflags -march=armv9-a+sve2+crypto+i8mm"
+	cpuflags="$cpuflags -march=armv9-a+sve2+sve2-bitperm+sha3+sm4+lse+dotprod"
 fi
 
 args=(
 	--target-os=android --enable-cross-compile
-	--cross-prefix=$ndk_triple- --cc=$CC --pkg-config=pkg-config --nm=llvm-nm
+	--cross-prefix=$ndk_triple- --cc=$CC --pkg-config=pkg-config --pkg-config-flags="--static" --nm=llvm-nm
+	--ar=$AR --ranlib=$RANLIB
 	--arch=${ndk_triple%%-*} --cpu=$cpu
-	--extra-cflags="-I$prefix_dir/include $cpuflags" --extra-ldflags="-L$prefix_dir/lib -lvulkan"
+	--extra-cflags="-I$prefix_dir/include $cpuflags $CFLAGS" --extra-ldflags="-L$prefix_dir/lib -lvulkan $LDFLAGS"
 
+	--enable-lto
 	--enable-{jni,mediacodec,mbedtls,libdav1d}
 
 	# === VULKAN SUPPORT & OPTIMIZATIONS ===

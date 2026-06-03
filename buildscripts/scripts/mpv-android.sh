@@ -72,7 +72,7 @@ fi
 
 bash "$BUILD/scripts/write_versions.sh" $ndk_suffix
 
-PREFIX64=$prefix64 PREFIX64_V9A=$prefix64_v9a PREFIX_X64=$prefix_x64 PREFIX_X86=$prefix_x86 \
+PREFIX64=$prefix64 PREFIX_X64=$prefix_x64 PREFIX_X86=$prefix_x86 \
 ndk-build -C app/src/main -j$cores
 
 # === ARM v9a optimized libraries — ship as assets for runtime loading ===
@@ -97,12 +97,18 @@ if [ -n "$prefix64_v9a" ]; then
 		fi
 	done
 
-	# Also copy libplayer.so from the ndk-build output if v9a was built
-	# This requires a separate ndk-build with v9a prefix
-	if [ -f "$MPV_ANDROID/app/src/main/obj/local/arm64-v8a/libplayer.so" ]; then
-		# Rebuild libplayer with v9a libs for full v9a chain
-		echo "Note: libplayer.so in assets uses base v8a build (JNI wrapper, minimal perf impact)"
-	fi
+	# Build a dedicated arm64-v9a version of libplayer.so
+	echo "Building ARM v9a optimized libplayer.so..."
+	PREFIX64="$prefix64_v9a" \
+	ndk-build -C app/src/main -j$cores APP_ABI=arm64-v8a \
+		NDK_OUT="$MPV_ANDROID/app/src/main/obj-v9a" \
+		NDK_LIBS_OUT="$MPV_ANDROID/app/src/main/libs-v9a"
+
+	# Copy the v9a-optimized libplayer.so to the v9a assets folder
+	cp -v "$MPV_ANDROID/app/src/main/libs-v9a/arm64-v8a/libplayer.so" "$v9a_asset_dir/libplayer.so"
+
+	# Clean up temporary directories
+	rm -rf "$MPV_ANDROID/app/src/main/obj-v9a" "$MPV_ANDROID/app/src/main/libs-v9a"
 
 	echo "ARM v9a libraries packaged at: $v9a_asset_dir"
 	ls -lh "$v9a_asset_dir/"

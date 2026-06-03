@@ -21,6 +21,7 @@ mycflags=(
 	-Dgetlocaledecpoint\\\(\\\)=\\\(46\\\)
 	# force fallback as ftello/fseeko are not defined [src/liolib.c]
 	-Dlua_fseek
+	$CFLAGS
 )
 
 # LUA_T= and LUAC_T= to disable building lua & luac

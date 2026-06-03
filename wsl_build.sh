@@ -26,14 +26,25 @@ cd buildscripts
 echo 2007 | sudo -S ./download.sh
 echo 2007 | sudo -S chown -R $USER:$USER /home/sagnik/mpvlibAndroid
 
+echo "Downloading latest Vulkan-Headers..."
+if [ ! -d "deps/Vulkan-Headers" ]; then
+    git clone https://github.com/KhronosGroup/Vulkan-Headers.git deps/Vulkan-Headers
+fi
+
 echo "Step 4: Building arm64-v8a (base) - CLEAN BUILD..."
-./buildall.sh --clean --arch arm64
+mkdir -p prefix/arm64/include
+cp -r deps/Vulkan-Headers/include/vulkan prefix/arm64/include/
+cp -r deps/Vulkan-Headers/include/vk_video prefix/arm64/include/
+./buildall.sh --clean --arch arm64 mpv
 
 echo "Step 5: Building arm64-v9a (SVE2 optimized) - CLEAN BUILD..."
-./buildall.sh --clean --arch arm64-v9a
+mkdir -p prefix/arm64-v9a/include
+cp -r deps/Vulkan-Headers/include/vulkan prefix/arm64-v9a/include/
+cp -r deps/Vulkan-Headers/include/vk_video prefix/arm64-v9a/include/
+./buildall.sh --clean --arch arm64-v9a mpv
 
 echo "Step 6: Packaging final mpv-android AAR..."
-./buildall.sh mpv-android
+./buildall.sh --clean mpv-android
 cd ..
 
 echo "Step 7: Copying generated AARs back to Windows host..."

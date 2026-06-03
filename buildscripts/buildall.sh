@@ -67,25 +67,38 @@ loadarch () {
 	fi
 
 	# Base linker flags — 16KB page size support for modern Android
-	export LDFLAGS="-Wl,-O1,--icf=safe -Wl,-z,max-page-size=16384"
+	export LDFLAGS="-Wl,-O1,--icf=safe -Wl,-z,max-page-size=16384 -Wl,--gc-sections"
 
 	# === Architecture-specific optimization flags ===
 	if [ "$ARM_V9A" -eq 1 ]; then
-		# ARM v9a: SVE2 + enhanced NEON + crypto + I8MM
+		# ARM v9a: SVE2 + enhanced NEON + crypto + I8MM (Safe version: no SME to prevent crashes)
 		# Tuned for Cortex-X3/X4 (Snapdragon 8 Gen 2/3, Dimensity 9200/9300, Exynos 2400)
-		export CFLAGS="-march=armv9-a+sve2+sve2-bitperm+sme+sha3+sm4+lse+dotprod -mtune=cortex-x3 -O3 -flto=thin -ffast-math -fno-math-errno -fomit-frame-pointer"
+		export CFLAGS="-march=armv9-a+sve2+sve2-bitperm+sha3+sm4+lse+dotprod -mtune=cortex-x3 -O3 -flto=thin -ffast-math -fno-math-errno -fomit-frame-pointer -fno-plt -fno-semantic-interposition -ffunction-sections -fdata-sections"
 		export CXXFLAGS="$CFLAGS"
 		export LDFLAGS="$LDFLAGS -flto=thin -fuse-ld=lld"
 	elif [[ "$ndk_triple" == "aarch64"* ]]; then
-		# ARM v8a base: NEON + CRC + crypto, tuned for Cortex-A76 class cores
-		# This gives 8-10% boost over the default NDK flags
-		export CFLAGS="-march=armv8-a+crypto+crc -mtune=cortex-a76 -O3 -flto=thin -ffast-math -fno-math-errno -fomit-frame-pointer"
+		# ARM v8a base: NEON + CRC (Safe version: no crypto to prevent crashes on budget/old SoCs)
+		# Tuned for Cortex-A76 class cores
+		export CFLAGS="-march=armv8-a+crc -mtune=cortex-a76 -O3 -flto=thin -ffast-math -fno-math-errno -fomit-frame-pointer -fno-plt -fno-semantic-interposition -ffunction-sections -fdata-sections"
 		export CXXFLAGS="$CFLAGS"
 		export LDFLAGS="$LDFLAGS -flto=thin -fuse-ld=lld"
 	fi
 
 	export AR=llvm-ar
 	export RANLIB=llvm-ranlib
+}
+
+to_meson_array () {
+	local flags=($1)
+	local result=""
+	for flag in "${flags[@]}"; do
+		if [ -n "$result" ]; then
+			result="$result, '$flag'"
+		else
+			result="'$flag'"
+		fi
+	done
+	echo "[$result]"
 }
 
 setup_prefix () {
@@ -115,6 +128,11 @@ setup_prefix () {
 		cpu_tune="cortex-x3"
 	fi
 
+	# Convert CFLAGS and LDFLAGS into Meson-compatible array format
+	local c_args_meson=$(to_meson_array "$CFLAGS")
+	local cpp_args_meson=$(to_meson_array "$CXXFLAGS")
+	local link_args_meson=$(to_meson_array "$LDFLAGS")
+
 	# meson wants to be spoonfed this file, so create it ahead of time
 	# also define: release build, static libs and no source downloads at runtime(!!!)
 	cat >"$prefix_dir/crossfile.tmp" <<CROSSFILE
@@ -123,6 +141,10 @@ buildtype = 'release'
 default_library = 'static'
 wrap_mode = 'nodownload'
 prefix = '/usr/local'
+c_args = $c_args_meson
+cpp_args = $cpp_args_meson
+c_link_args = $link_args_meson
+cpp_link_args = $link_args_meson
 [binaries]
 c = '$CC'
 cpp = '$CXX'

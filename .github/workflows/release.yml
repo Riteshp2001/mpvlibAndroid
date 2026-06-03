@@ -219,6 +219,9 @@ jobs:
             cp -r deps/Vulkan-Headers/include/vulkan "prefix/$arch/include/"
             cp -r deps/Vulkan-Headers/include/vk_video "prefix/$arch/include/"
             ./buildall.sh --arch "$arch" mpv
+            if [ "$arch" != "arm64-v9a" ]; then
+              ./buildall.sh --arch "$arch" python
+            fi
           done
 
           ./buildall.sh --clean mpv-android
