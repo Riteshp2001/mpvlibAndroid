@@ -21,6 +21,9 @@ abi=armeabi-v7a
 
 # Strip LTO flags for shaderc as ndk-build's static combining/stripping toolchain does not support LLVM bitcode
 shaderc_cflags="${CFLAGS//-flto=thin/}"
+# Strip global -O2 optimization and force -Os (Optimize for Size) for shaderc specifically.
+# This prevents bloated SPIR-V binaries and reduces cache pressure on the mobile GPU.
+shaderc_cflags="${shaderc_cflags//-O2/-Os}"
 shaderc_cflags="${shaderc_cflags} -fno-fast-math"
 shaderc_ldflags="${LDFLAGS//-flto=thin/}"
 

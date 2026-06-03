@@ -17,7 +17,9 @@ unset CC CXX # meson wants these unset
 
 meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
 	-Denable_tests=false -Dstack_alignment=16 \
-	-Denable_asm=true
+	-Denable_asm=true \
+	-Dlogging=false \
+	-Dbitdepths='["8", "16"]'
 
 ninja -C $build -j$cores
 DESTDIR="$prefix_dir" ninja -C $build install

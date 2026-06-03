@@ -275,13 +275,18 @@ object AbiDetector {
             val features = featuresLine.substringAfter(":").trim().split("\\s+".toRegex())
             val hasSve2 = features.any { it.equals("sve2", ignoreCase = true) }
             val hasI8mm = features.any { it.equals("i8mm", ignoreCase = true) }
+            val hasSve = features.any { it.equals("sve", ignoreCase = true) }
 
+            Log.d(TAG, "cpuinfo features: sve=$hasSve, sve2=$hasSve2, i8mm=$hasI8mm")
             if (hasSve2 || hasI8mm) {
-                Log.d(TAG, "cpuinfo features (v9a relevant): sve2=$hasSve2, i8mm=$hasI8mm")
                 Log.d(TAG, "Full features: ${features.joinToString(" ")}")
             }
 
-            hasSve2 || hasI8mm
+            // CRITICAL: We MUST require SVE2 specifically.
+            // i8mm alone is an ARMv8.6 extension and does NOT guarantee SVE2 hardware.
+            // Our v9a libraries are compiled with -march=armv9-a+sve2, so loading them
+            // on a device without SVE2 silicon causes SIGILL crash.
+            hasSve2
         } catch (e: Exception) {
             Log.w(TAG, "Failed to read /proc/cpuinfo", e)
             false

@@ -71,16 +71,21 @@ loadarch () {
 
 	# === Architecture-specific optimization flags ===
 	if [ "$ARM_V9A" -eq 1 ]; then
-		# ARM v9a: SVE2 + enhanced NEON + I8MM
-		# Tuned for Cortex-X3/X4. We strictly avoid +sve2-bitperm, +sha3, +sm4, and +sme
-		# as they are optional features and cause SIGILL on many Snapdragon/Dimensity SoCs.
-		export CFLAGS="-march=armv9-a+sve2+lse+dotprod -mtune=cortex-x3 -O3 -flto=thin -ffast-math -fno-math-errno -fomit-frame-pointer -fno-plt -fno-semantic-interposition -ffunction-sections -fdata-sections"
+		# ARM v9a: SVE2 only. Devices where kernel exposes SVE2 (e.g. Pixel 9, Galaxy S24 Ultra).
+		# STRICTLY AVOID: +sve2-bitperm, +sha3, +sm4, +sme — these are OPTIONAL extensions
+		# that most SoCs (including Snapdragon 8 Gen 2/3, Dimensity 9200/9400) do NOT implement.
+		# Many OEMs also disable SVE2 entirely in the kernel (e.g. iQOO, Vivo, Xiaomi).
+		# Our AbiDetector.kt only loads these libs when /proc/cpuinfo actually lists "sve2".
+		export CFLAGS="-march=armv9-a+sve2+lse+dotprod -mtune=cortex-x3 -O2 -flto=thin -ffast-math -fno-math-errno -fomit-frame-pointer -fno-plt -fno-semantic-interposition -ffunction-sections -fdata-sections"
 		export CXXFLAGS="$CFLAGS"
 		export LDFLAGS="$LDFLAGS -flto=thin -fuse-ld=lld"
 	elif [[ "$ndk_triple" == "aarch64"* ]]; then
-		# ARM v8a base: NEON + CRC (Safe version: no crypto to prevent crashes on budget/old SoCs)
-		# Tuned for Cortex-A76 class cores
-		export CFLAGS="-march=armv8-a+crc -mtune=cortex-a76 -O3 -flto=thin -ffast-math -fno-math-errno -fomit-frame-pointer -fno-plt -fno-semantic-interposition -ffunction-sections -fdata-sections"
+		# ARM v8a base: NEON + CRC. This is the UNIVERSAL path for ALL arm64 Android devices.
+		# Must support everything from Snapdragon 835 (2017) to Snapdragon 8s Gen 3 (2024).
+		# NO +crypto/+sha3/+dotprod/+lse — old budget SoCs (Helio P22, Exynos 7885) lack them.
+		# -mtune=cortex-a75 targets the median 2024 device profile (better scheduling than a76
+		# while generating compatible code for all armv8-a chips).
+		export CFLAGS="-march=armv8-a+simd+crc -mtune=cortex-a75 -O2 -flto=thin -ffast-math -fno-math-errno -fomit-frame-pointer -fno-plt -fno-semantic-interposition -ffunction-sections -fdata-sections"
 		export CXXFLAGS="$CFLAGS"
 		export LDFLAGS="$LDFLAGS -flto=thin -fuse-ld=lld"
 	fi
@@ -139,6 +144,7 @@ setup_prefix () {
 	cat >"$prefix_dir/crossfile.tmp" <<CROSSFILE
 [built-in options]
 buildtype = 'release'
+optimization = '2'
 default_library = 'static'
 wrap_mode = 'nodownload'
 prefix = '/usr/local'

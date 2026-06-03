@@ -27,9 +27,10 @@ fi
 cpuflags=
 # ARM NEON intrinsics — always enabled for arm64
 [[ "$ndk_triple" == "aarch64"* ]] && cpuflags="$cpuflags -DHAVE_NEON=1"
-# v9a: explicit SVE2 instruction set (Safe version: matches our buildall.sh flags)
+# v9a: SVE2 only — strictly matches our safe buildall.sh flags
+# DO NOT add +sve2-bitperm, +sha3, +sm4, +sme — they cause SIGILL on most devices
 if [ "${ARM_V9A:-0}" -eq 1 ]; then
-	cpuflags="$cpuflags -march=armv9-a+sve2+sve2-bitperm+sha3+sm4+lse+dotprod"
+	cpuflags="$cpuflags -march=armv9-a+sve2+lse+dotprod"
 fi
 
 args=(
@@ -41,6 +42,17 @@ args=(
 
 	--enable-lto
 	--enable-{jni,mediacodec,mbedtls,libdav1d}
+
+	# === RUNTIME CPU DETECTION ===
+	# Let FFmpeg auto-detect NEON/dotprod/i8mm/sha3/etc. at runtime
+	# This means v8a builds get optimized codepaths on capable devices WITHOUT
+	# compiling dangerous instructions into the binary
+	--enable-runtime-cpudetect
+
+	# === THREADING — reduce CPU load & heating ===
+	# frame: decode multiple frames in parallel (lower latency per-frame)
+	# slice: decode slices of a single frame in parallel (useful for H.264/H.265)
+	--enable-pthreads
 
 	# === VULKAN SUPPORT & OPTIMIZATIONS ===
 	--enable-vulkan

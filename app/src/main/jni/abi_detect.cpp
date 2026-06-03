@@ -26,16 +26,17 @@ extern "C" {
  * This is the most reliable method on Linux/Android — directly queries the kernel
  * for CPU feature flags without parsing /proc/cpuinfo.
  *
- * Returns true if the CPU supports SVE2 or I8MM (both are mandatory ARMv9 features).
- * Compatible SoCs: Cortex-X3+, Cortex-A720+, Snapdragon 8 Gen 2+, Dimensity 9200+, Exynos 2400+
+ * Returns true ONLY if the CPU supports SVE2.
+ * CRITICAL: i8mm alone is NOT sufficient — it's an ARMv8.6 extension that many
+ * non-SVE2 chips have. Our v9a libraries are compiled with -march=armv9-a+sve2,
+ * so they contain actual SVE2 instructions that SIGILL on non-SVE2 hardware.
  */
 JNIEXPORT jboolean JNICALL
 Java_is_xyz_mpv_AbiDetector_nativeCheckSve2Support(JNIEnv*, jclass) {
 #ifdef __aarch64__
     unsigned long hwcap2 = getauxval(AT_HWCAP2);
-    // SVE2 is the defining mandatory feature of ARMv9-A
-    // I8MM (Int8 Matrix Multiply) is also mandatory in ARMv9
-    return (jboolean)((hwcap2 & HWCAP2_SVE2) || (hwcap2 & HWCAP2_I8MM));
+    // Strictly require SVE2 — this is the only feature our v9a libs actually use
+    return (jboolean)((hwcap2 & HWCAP2_SVE2) != 0);
 #else
     return JNI_FALSE;
 #endif
