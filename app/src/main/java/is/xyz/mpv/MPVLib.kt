@@ -39,19 +39,10 @@ object MPVLib {
         Log.i(TAG, "Native libraries loaded — ABI: ${AbiDetector.detectOptimalAbi().displayName}")
     }
 
-    // Fallback for apps that don't call loadLibraries() with context
-    init {
-        try {
-            // Try standard loading — this works for v8a and when v9a isn't needed
-            val libs = arrayOf("mpv", "player")
-            for (lib in libs) {
-                System.loadLibrary(lib)
-            }
-        } catch (e: UnsatisfiedLinkError) {
-            // Libraries will be loaded by loadLibraries(context) instead
-            Log.d(TAG, "Deferred library loading — call MPVLib.loadLibraries(context) for v9a support")
-        }
-    }
+    // Note: Eager initialization via init {} was removed because it prematurely
+    // loads the v8a fallback libraries into memory. If v8a libraries are loaded first,
+    // Android's dlopen will ignore the absolute path v9a loading later and just reuse the v8a handle.
+    // Apps MUST call MPVLib.loadLibraries(context) during App.onCreate().
 
     external fun create(appctx: Context)
     external fun init()
