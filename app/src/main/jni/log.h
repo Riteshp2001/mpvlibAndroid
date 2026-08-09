@@ -1,6 +1,7 @@
 #pragma once
 
 #include <android/log.h>
+#include <mutex>
 
 #define DEBUG 1
 
@@ -17,7 +18,11 @@
 
 __attribute__((noreturn)) void die(const char *msg);
 
-#define CHECK_MPV_INIT() do { \
-	if (__builtin_expect(!g_mpv, 0)) \
-        die("libmpv is not initialized"); \
-	} while (0)
+// Keep every JNI call that touches g_mpv serialized against final destruction.
+// The mutex is recursive because a few helpers are shared by already-guarded calls.
+#define CHECK_MPV_INIT() \
+    std::lock_guard<std::recursive_mutex> mpv_lifecycle_lock(g_mpv_mutex); \
+    do { \
+        if (__builtin_expect(!g_mpv, 0)) \
+            die("libmpv is not initialized"); \
+    } while (0)

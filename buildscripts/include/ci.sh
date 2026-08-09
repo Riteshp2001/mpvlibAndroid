@@ -77,14 +77,19 @@ elif [ "$1" = "install" ]; then
 	msg "Fetching SDK + NDK"
 	IN_CI=1 ./include/download-sdk.sh
 
-	msg "Fetching mpv"
-	if [ ! -d deps/mpv ]; then
-		git clone --depth 1 https://github.com/mpv-player/mpv deps/mpv
+	msg "Fetching mpv v$v_mpv"
+	mpv_tag="v$v_mpv"
+	if [ ! -d deps/mpv/.git ]; then
+		rm -rf deps/mpv
+		git clone --depth 1 --branch "$mpv_tag" https://github.com/mpv-player/mpv deps/mpv
 	else
-		git -C deps/mpv fetch --depth 1 origin master
-		git -C deps/mpv reset --hard origin/master
+		git -C deps/mpv fetch --force --depth 1 origin "refs/tags/$mpv_tag:refs/tags/$mpv_tag"
+		git -C deps/mpv checkout --force --detach "$mpv_tag"
 	fi
-	git -C deps/mpv apply ../../patches/mpv_video_shaders.patch
+	git -C deps/mpv reset --hard "$mpv_tag"
+	if ! git -C deps/mpv apply --reverse --check ../../patches/mpv_video_shaders.patch 2>/dev/null; then
+		git -C deps/mpv apply ../../patches/mpv_video_shaders.patch
+	fi
 
 	msg "Trying to fetch existing prefix"
 	mkdir -p prefix

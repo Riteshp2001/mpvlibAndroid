@@ -60,27 +60,21 @@ require_version() {
 MPV_CLIENT_API_VERSION=$(pc_version mpv)
 MPV_CLIENT_API_VERSION=${MPV_CLIENT_API_VERSION%.0}
 
-# Meson writes the version used by the compiled library to this generated header.
-MPV_VERSION_HEADER="buildscripts/deps/mpv/_build$1/common/version.h"
-MPV_VERSION=
-if [ -f "$MPV_VERSION_HEADER" ]; then
-	MPV_VERSION=$(sed -n 's/^#define VERSION "\(.*\)"/\1/p' "$MPV_VERSION_HEADER" | head -n 1)
-	MPV_VERSION=${MPV_VERSION#v}
+# Only package an mpv source tree whose HEAD is exactly the configured release tag.
+# Local Android patches may make the working tree dirty, but they must never change
+# the upstream source revision or leak a commit/dirty suffix into the AAR metadata.
+MPV_SOURCE_DIR="buildscripts/deps/mpv"
+MPV_EXPECTED_TAG="v$v_mpv"
+if [ ! -d "$MPV_SOURCE_DIR/.git" ]; then
+	echo "mpv source is not a git checkout; expected release tag $MPV_EXPECTED_TAG." >&2
+	exit 1
 fi
-
-# Match mpv's version generation when the generated header is unavailable.
-if [ -z "$MPV_VERSION" ]; then
-	MPV_VERSION=$(git -C buildscripts/deps/mpv describe \
-		--abbrev=9 \
-		--tags \
-		--dirty \
-		--match 'v0.*' 2>/dev/null || true)
-	MPV_VERSION=${MPV_VERSION#v}
+MPV_SOURCE_TAG=$(git -C "$MPV_SOURCE_DIR" describe --tags --exact-match HEAD 2>/dev/null || true)
+if [ "$MPV_SOURCE_TAG" != "$MPV_EXPECTED_TAG" ]; then
+	echo "mpv HEAD is '$MPV_SOURCE_TAG'; expected exact release tag '$MPV_EXPECTED_TAG'." >&2
+	exit 1
 fi
-
-if [ -z "$MPV_VERSION" ] && [ -f buildscripts/deps/mpv/MPV_VERSION ]; then
-	MPV_VERSION=$(sed 's/-UNKNOWN$//' buildscripts/deps/mpv/MPV_VERSION)
-fi
+MPV_VERSION=$v_mpv
 
 # Installed pkg-config files survive CI prefix cache restores and describe the
 # artifacts that are actually packaged rather than whichever sources are present.

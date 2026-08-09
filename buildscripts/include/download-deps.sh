@@ -86,8 +86,17 @@ HEREDOC
 # libplacebo - use GitHub mirror (haasn/libplacebo)
 [ ! -d libplacebo ] && git clone --recursive https://github.com/haasn/libplacebo
 
-# mpv
-[ ! -d mpv ] && git clone https://github.com/mpv-player/mpv
+# mpv - always build from the configured stable release tag, never master
+mpv_tag="v$v_mpv"
+if [ ! -d mpv/.git ]; then
+	rm -rf mpv
+	git clone --depth 1 --branch "$mpv_tag" https://github.com/mpv-player/mpv mpv
+else
+	git -C mpv fetch --force --depth 1 origin "refs/tags/$mpv_tag:refs/tags/$mpv_tag"
+	git -C mpv checkout --force --detach "$mpv_tag"
+fi
+# Remove tracked changes from previous runs before applying our Android patch.
+git -C mpv reset --hard "$mpv_tag"
 if ! git -C mpv apply --reverse --check ../../patches/mpv_video_shaders.patch 2>/dev/null; then
 	git -C mpv apply ../../patches/mpv_video_shaders.patch
 fi

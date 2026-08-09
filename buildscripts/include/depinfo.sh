@@ -17,6 +17,7 @@ v_freetype=2.14.3
 v_mbedtls=3.6.6
 v_openssl=3.5.7
 v_mujs=1.3.9
+v_mpv=0.41.0
 
 
 ## Dependency tree

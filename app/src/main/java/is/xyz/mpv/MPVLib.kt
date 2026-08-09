@@ -25,9 +25,92 @@ object MPVLib {
         }
     }
 
-    external fun create(appctx: Context)
-    external fun init()
-    external fun destroy()
+    private external fun nativeCreate(appctx: Context): Boolean
+    private external fun nativeInit(): Boolean
+    private external fun nativeDestroy(): Boolean
+
+    private enum class LifecycleState {
+        IDLE,
+        CREATED,
+        INITIALIZED,
+        DESTROYING,
+    }
+
+    private val lifecycleLock = Any()
+
+    @Volatile
+    private var lifecycleState = LifecycleState.IDLE
+
+    /**
+     * Create the native libmpv handle. Options may be configured after this and
+     * before [init]. The application context is retained natively, never an Activity.
+     */
+    fun create(appctx: Context) {
+        synchronized(lifecycleLock) {
+            check(lifecycleState == LifecycleState.IDLE) {
+                "MPVLib.create() called while lifecycle state is $lifecycleState"
+            }
+
+            val applicationContext = appctx.applicationContext ?: appctx
+            check(nativeCreate(applicationContext)) { "Failed to create libmpv" }
+            lifecycleState = LifecycleState.CREATED
+        }
+    }
+
+    /** Initialize libmpv and start its native event loop exactly once. */
+    fun init() {
+        synchronized(lifecycleLock) {
+            check(lifecycleState == LifecycleState.CREATED) {
+                "MPVLib.init() requires create() first (state=$lifecycleState)"
+            }
+
+            if (!nativeInit()) {
+                // nativeInit() also cleans up partial native initialization; this
+                // is intentionally idempotent so the Kotlin/native states converge.
+                nativeDestroy()
+                lifecycleState = LifecycleState.IDLE
+                error("Failed to initialize libmpv")
+            }
+            lifecycleState = LifecycleState.INITIALIZED
+        }
+    }
+
+    /**
+     * Destroy the current libmpv instance. Repeated/concurrent calls are safe.
+     * Teardown itself is intentionally performed outside [lifecycleLock], because
+     * the native event thread may finish an in-flight Java callback before join.
+     */
+    fun destroy() {
+        val previousState = synchronized(lifecycleLock) {
+            when (lifecycleState) {
+                LifecycleState.IDLE,
+                LifecycleState.DESTROYING -> return
+                LifecycleState.CREATED,
+                LifecycleState.INITIALIZED -> lifecycleState.also {
+                    lifecycleState = LifecycleState.DESTROYING
+                }
+            }
+        }
+
+        val destroyed = nativeDestroy()
+        synchronized(lifecycleLock) {
+            lifecycleState = if (destroyed) LifecycleState.IDLE else previousState
+        }
+
+        check(destroyed) {
+            "Failed to destroy libmpv (destroy cannot start from the MPV event callback thread)"
+        }
+    }
+
+    fun isCreated(): Boolean = when (lifecycleState) {
+        LifecycleState.CREATED,
+        LifecycleState.INITIALIZED -> true
+        LifecycleState.IDLE,
+        LifecycleState.DESTROYING -> false
+    }
+
+    fun isInitialized(): Boolean = lifecycleState == LifecycleState.INITIALIZED
+
     external fun attachSurface(surface: Surface)
     external fun detachSurface()
 
