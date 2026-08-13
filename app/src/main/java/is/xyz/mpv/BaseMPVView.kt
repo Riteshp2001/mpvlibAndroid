@@ -24,7 +24,7 @@ abstract class BaseMPVView(context: Context, attrs: AttributeSet) : SurfaceView(
      * Call this once before the view is shown.
      */
     fun initialize(configDir: String, cacheDir: String) {
-        MPVLib.create(context)
+        MPVLib.create(context.applicationContext)
 
         MPVLib.setOptionString("config", "yes")
         MPVLib.setOptionString("config-dir", configDir)
@@ -51,7 +51,6 @@ abstract class BaseMPVView(context: Context, attrs: AttributeSet) : SurfaceView(
      */
     fun destroy() {
         holder.removeCallback(this)
-        clearAllProperties()
         MPVLib.destroy()
     }
 
@@ -114,12 +113,6 @@ abstract class BaseMPVView(context: Context, attrs: AttributeSet) : SurfaceView(
         propLong.map.keys.forEach { observeProperty(it, MpvFormat.MPV_FORMAT_INT64) }
         propInt.map.keys.forEach { observeProperty(it, MpvFormat.MPV_FORMAT_INT64) }
         propNode.map.keys.forEach { observeProperty(it, MpvFormat.MPV_FORMAT_NODE) }
-    }
-
-    private fun clearAllProperties() {
-        listOf(propInt, propBoolean, propDouble, propString, propFloat, propLong, propNode).forEach {
-            it.map.clear()
-        }
     }
 
     companion object {

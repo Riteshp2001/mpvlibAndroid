@@ -17,13 +17,14 @@ extern "C" {
 #include "jni_utils.h"
 #include "event.h"
 #include "node.h"
+#include "render.h"
 
 #define ARRAYLEN(a) (sizeof(a)/sizeof(a[0]))
 
 extern "C" {
     jni_func(void, create, jobject appctx);
     jni_func(void, init);
-    jni_func(void, destroy);
+    jni_func(void, destroyNative);
 
     jni_func(void, command, jobjectArray jarray);
     jni_func(jobject, commandNode, jobjectArray jarray);
@@ -34,14 +35,20 @@ mpv_handle *g_mpv;
 std::atomic<bool> g_event_thread_request_exit(false);
 
 static pthread_t event_thread_id;
+static jobject global_appctx;
 
 static void prepare_environment(JNIEnv *env, jobject appctx) {
     setlocale(LC_NUMERIC, "C");
 
-    if (!env->GetJavaVM(&g_vm) && g_vm)
-        av_jni_set_java_vm(g_vm, NULL);
+    g_vm = NULL;
+    env->GetJavaVM(&g_vm);
+    if (!g_vm)
+        die("failed to get jvm");
+    av_jni_set_java_vm(g_vm, NULL);
 
-    jobject global_appctx = env->NewGlobalRef(appctx);
+    if (global_appctx)
+        env->DeleteGlobalRef(global_appctx);
+    global_appctx = env->NewGlobalRef(appctx);
     if (global_appctx)
         av_jni_set_android_app_ctx(global_appctx, NULL);
 
@@ -49,10 +56,10 @@ static void prepare_environment(JNIEnv *env, jobject appctx) {
 }
 
 jni_func(void, create, jobject appctx) {
-    prepare_environment(env, appctx);
-
     if (g_mpv)
         die("mpv is already initialized");
+
+    prepare_environment(env, appctx);
 
     g_mpv = mpv_create();
     if (!g_mpv)
@@ -77,7 +84,7 @@ jni_func(void, init) {
     pthread_setname_np(event_thread_id, "event_thread");
 }
 
-jni_func(void, destroy) {
+jni_func(void, destroyNative) {
     if (!g_mpv) {
         ALOGV("mpv destroy called but it's already destroyed");
         return;
@@ -88,6 +95,7 @@ jni_func(void, destroy) {
     mpv_wakeup(g_mpv);
     pthread_join(event_thread_id, NULL);
 
+    release_surface(env);
     mpv_terminate_destroy(g_mpv);
     g_mpv = NULL;
 }

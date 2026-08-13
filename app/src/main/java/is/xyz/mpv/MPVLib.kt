@@ -3,17 +3,13 @@ package `is`.xyz.mpv
 import android.content.Context
 import android.graphics.Bitmap
 import android.view.Surface
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import java.util.concurrent.ConcurrentHashMap
 
 @Suppress("unused")
@@ -27,9 +23,17 @@ object MPVLib {
 
     external fun create(appctx: Context)
     external fun init()
-    external fun destroy()
+    private external fun destroyNative()
     external fun attachSurface(surface: Surface)
     external fun detachSurface()
+
+    fun destroy() {
+        try {
+            destroyNative()
+        } finally {
+            clearManagedState()
+        }
+    }
 
     external fun command(vararg cmd: String)
     external fun commandNode(vararg cmd: String): MPVNode?
@@ -65,7 +69,6 @@ object MPVLib {
 
     private val observers: MutableList<EventObserver> = ArrayList()
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val eventFlow =
         MutableSharedFlow<Int>(extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private val eventPropertyFlow =
@@ -81,9 +84,7 @@ object MPVLib {
         operator fun get(property: String): StateFlow<T?> {
             return map.getOrPut(property) {
                 observeProperty(property, type)
-                flow.filter { it.first == property }
-                    .map { it.second }
-                    .stateIn(scope, SharingStarted.Lazily, getProperty(property))
+                MutableStateFlow(getProperty(property))
             }
         }
 
@@ -101,6 +102,8 @@ object MPVLib {
         }
 
         fun emit(property: String, value: T) {
+            @Suppress("UNCHECKED_CAST")
+            (map[property] as? MutableStateFlow<T?>)?.value = value
             flow.tryEmit(Pair(property, value))
         }
     }
@@ -198,6 +201,14 @@ object MPVLib {
     @JvmStatic
     fun removeLogObserver(o: LogObserver) {
         synchronized(log_observers) { log_observers.remove(o) }
+    }
+
+    private fun clearManagedState() {
+        listOf(propInt, propBoolean, propDouble, propString, propFloat, propLong, propNode).forEach {
+            it.map.clear()
+        }
+        synchronized(observers) { observers.clear() }
+        synchronized(log_observers) { log_observers.clear() }
     }
 
     @JvmStatic
