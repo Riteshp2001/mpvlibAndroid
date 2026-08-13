@@ -23,6 +23,9 @@ if [ ! -d ffmpeg ]; then
 	git clone https://github.com/FFmpeg/FFmpeg ffmpeg
 	[ $IN_CI -eq 1 ] && git -C ffmpeg checkout $v_ci_ffmpeg
 fi
+if ! git -C ffmpeg apply --reverse --check ../../patches/ffmpeg_force_mpegts.patch 2>/dev/null; then
+	git -C ffmpeg apply ../../patches/ffmpeg_force_mpegts.patch
+fi
 
 # freetype2
 if [ ! -d freetype2 ]; then

@@ -43,6 +43,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Validate Semantic Version
+        run: |
+          bash buildscripts/version.sh validate
+          echo "VERSION_NAME=$(bash buildscripts/version.sh name)" >> "$GITHUB_ENV"
+
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -181,11 +186,11 @@ jobs:
             exit 1
           fi
 
-          cp "$AAR_PATH" dist/mpvlib.aar
+          cp "$AAR_PATH" "dist/mpvlib-${VERSION_NAME}.aar"
 
       - name: Upload AAR artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mpvlib
-          path: dist/mpvlib.aar
+          name: mpvlib-${{ env.VERSION_NAME }}
+          path: dist/mpvlib-${{ env.VERSION_NAME }}.aar
           if-no-files-found: error
