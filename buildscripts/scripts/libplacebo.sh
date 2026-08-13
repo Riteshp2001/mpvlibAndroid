@@ -13,9 +13,23 @@ else
 	exit 255
 fi
 
+case "$prefix_dir" in
+	"$DIR"/prefix/*) ;;
+	*) echo "Invalid build prefix: $prefix_dir" >&2; exit 1 ;;
+esac
+
+rm -f \
+	"$prefix_dir/lib/libshaderc.a" \
+	"$prefix_dir/lib/libshaderc_combined.a" \
+	"$prefix_dir/lib/pkgconfig/shaderc.pc" \
+	"$prefix_dir/lib/pkgconfig/shaderc_combined.pc"
+
 unset CC CXX
 meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
-	-Dvk-proc-addr=enabled -Ddemos=false
+	-Dopengl=enabled \
+	-Dvulkan=disabled \
+	-Dshaderc=disabled \
+	-Ddemos=false
 
 ninja -C $build -j$cores
 DESTDIR="$prefix_dir" ninja -C $build install

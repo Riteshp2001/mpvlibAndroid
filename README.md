@@ -30,7 +30,7 @@ This library brings the full power of mpv to Android — play any video, generat
 - Secure streaming by default
 
 ### 🎨 Video Output
-- Vulkan rendering via libplacebo + shaderc
+- OpenGL ES rendering via libplacebo
 - GPU shader cache support
 - Subtitle rendering with libass + HarfBuzz + FriBidi
 - AV1 decoding via dav1d
@@ -136,7 +136,7 @@ Utils.VERSIONS.dependencies.forEach { (name, version) ->
 | mpv | latest |
 | FFmpeg | n8.1.2 |
 | libplacebo | latest |
-| shaderc | Android NDK bundled version |
+| shaderc | disabled |
 | libass | latest |
 | dav1d | latest |
 | Lua | 5.2.4 |

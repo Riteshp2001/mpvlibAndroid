@@ -101,10 +101,9 @@ FREETYPE_VERSION=$(pc_version freetype2)
 FRIBIDI_VERSION=$(pc_version fribidi)
 HARFBUZZ_VERSION=$(pc_version harfbuzz)
 LIBUNIBREAK_VERSION=$(pc_version libunibreak)
-# shaderc is supplied by the selected NDK, whose pkg-config version is a
-# hard-coded pseudo-version. Report its actual provenance instead.
-pc_version shaderc_combined >/dev/null
-SHADERC_VERSION="bundled-with-$v_ndk"
+# Keep the public Versions API stable while making the omitted native
+# dependency explicit to consumers of this branch.
+SHADERC_VERSION=disabled
 NDK_VERSION=$v_ndk
 
 require_version mpv "$MPV_VERSION"
@@ -121,7 +120,6 @@ require_version FreeType "$FREETYPE_VERSION"
 require_version FriBidi "$FRIBIDI_VERSION"
 require_version HarfBuzz "$HARFBUZZ_VERSION"
 require_version libunibreak "$LIBUNIBREAK_VERSION"
-require_version shaderc "$SHADERC_VERSION"
 require_version "Android NDK" "$NDK_VERSION"
 
 # Get the build date from mpv's compiled object file.

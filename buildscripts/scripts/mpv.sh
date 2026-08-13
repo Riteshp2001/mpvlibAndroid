@@ -13,15 +13,12 @@ else
 	exit 255
 fi
 
-# Android provides Vulkan, but no pkgconfig file.
-mkdir -p "$prefix_dir"/lib/pkgconfig
-cat >"$prefix_dir"/lib/pkgconfig/vulkan.pc <<END
-Name: Vulkan
-Description:
-Version: 1.3.275
-Libs: -lvulkan
-Cflags:
-END
+case "$prefix_dir" in
+	"$DIR"/prefix/*) ;;
+	*) echo "Invalid build prefix: $prefix_dir" >&2; exit 1 ;;
+esac
+
+rm -f "$prefix_dir/lib/pkgconfig/vulkan.pc"
 
 unset CC CXX # meson wants these unset
 
@@ -55,12 +52,17 @@ meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
 	-Diconv=disabled \
 	-Dlua=enabled \
 	-Djavascript=enabled \
-	-Dvulkan=enabled \
+	-Dvulkan=disabled \
 	-Dlibmpv=true \
 	-Dcplayer=false \
 	-Dmanpage-build=disabled
 
 ninja -C $build -j$cores
+
+if readelf -d "$build/libmpv.so" 2>/dev/null | grep -Fq libvulkan.so; then
+	echo "Vulkan linkage detected in $build/libmpv.so; refusing to package it." >&2
+	exit 1
+fi
 
 if [ -f $build/libmpv.a ]; then
 	echo >&2 "Meson produced static libmpv.a instead of shared libmpv.so, forcing rebuild."
