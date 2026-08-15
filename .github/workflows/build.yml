@@ -186,11 +186,11 @@ jobs:
             exit 1
           fi
 
-          cp "$AAR_PATH" "dist/mpvlib-${VERSION_NAME}.aar"
+          cp "$AAR_PATH" "dist/mpvlib-no-vulkan.aar"
 
       - name: Upload AAR artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mpvlib-${{ env.VERSION_NAME }}
-          path: dist/mpvlib-${{ env.VERSION_NAME }}.aar
+          name: mpvlib-no-vulkan
+          path: dist/mpvlib-no-vulkan.aar
           if-no-files-found: error

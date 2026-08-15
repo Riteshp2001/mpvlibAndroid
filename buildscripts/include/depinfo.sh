@@ -14,7 +14,8 @@ v_unibreak=7.0
 v_harfbuzz=14.2.1
 v_fribidi=1.0.16
 v_freetype=2.14.3
-v_mbedtls=3.6.6
+v_mbedtls=3.6.7
+v_curl=8.21.0
 v_openssl=3.5.7
 v_mujs=1.3.9
 
@@ -34,7 +35,8 @@ dep_lua=()
 dep_mujs=()
 dep_openssl=()
 dep_libplacebo=()
-dep_mpv=(ffmpeg libass lua libplacebo mujs)
+dep_curl=(mbedtls)
+dep_mpv=(ffmpeg libass lua libplacebo curl mujs)
 dep_mpv_android=(mpv)
 
 
@@ -44,4 +46,4 @@ dep_mpv_android=(mpv)
 v_ci_ffmpeg=n9.0
 
 # filename used to uniquely identify a build prefix
-ci_tarball="prefix-ndk-${v_ndk}-lua-${v_lua}-mujs-${v_mujs}-unibreak-${v_unibreak}-harfbuzz-${v_harfbuzz}-fribidi-${v_fribidi}-freetype-${v_freetype}-mbedtls-${v_mbedtls}-openssl-${v_openssl}-ffmpeg-${v_ci_ffmpeg}-no-vulkan.tgz"
+ci_tarball="prefix-ndk-${v_ndk}-lua-${v_lua}-mujs-${v_mujs}-unibreak-${v_unibreak}-harfbuzz-${v_harfbuzz}-fribidi-${v_fribidi}-freetype-${v_freetype}-mbedtls-${v_mbedtls}-curl-${v_curl}-openssl-${v_openssl}-ffmpeg-${v_ci_ffmpeg}-no-vulkan.tgz"
