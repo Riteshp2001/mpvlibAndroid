@@ -20,11 +20,34 @@ esac
 
 rm -f "$prefix_dir/lib/pkgconfig/vulkan.pc"
 
+check_iconv_files () {
+	for file in "$prefix_dir/include/iconv.h" "$prefix_dir/lib/libiconv.a" "$prefix_dir/lib/libcharset.a"; do
+		if [ ! -f "$file" ]; then
+			echo "Missing libiconv file: $file" >&2
+			exit 1
+		fi
+	done
+}
+
+patch_mpv_iconv_dependency () {
+	local iconv_dep
+
+	# Meson's built-in iconv dependency does not consult iconv.pc, and find_library()
+	# has no extra search dirs here. Provide the just-built static libiconv directly.
+	iconv_dep="iconv = declare_dependency(compile_args: ['-I$prefix_dir/include'], link_args: ['$prefix_dir/lib/libiconv.a', '$prefix_dir/lib/libcharset.a'])"
+	${SED:-sed} -i.bak \
+		-e "/^iconv = dependency('iconv', required: get_option('iconv'))$/c\\$iconv_dep" \
+		-e "/^iconv = declare_dependency(compile_args: \['-I.*\/include'\], link_args: \['.*\/libiconv\.a', '.*\/libcharset\.a'\])$/c\\$iconv_dep" \
+		meson.build
+	rm -f meson.build.bak
+}
+
 unset CC CXX # meson wants these unset
 
 export LDFLAGS="$LDFLAGS -L$prefix_dir/lib"
 export CPPFLAGS="$CPPFLAGS -I$prefix_dir/include"
 
+check_iconv_files
 echo "Checking MuJS before building mpv..."
 
 if [ ! -f "$prefix_dir/lib/libmujs.a" ]; then
@@ -47,15 +70,17 @@ echo "pkg-config check for mujs:"
 pkg-config --libs mujs
 pkg-config --cflags mujs
 
+patch_mpv_iconv_dependency
+
 meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
 	--default-library shared \
-	-Diconv=disabled \
-	-Dlua=enabled \
+	-D{iconv,uchardet}=enabled \
+	-D{libarchive,dvdnav}=enabled \
+	-D{lua,libcurl,rubberband}=enabled \
 	-Djavascript=enabled \
-	-Dlibcurl=enabled \
+	-Dlibmpv=true -Dcplayer=false \
+	-Dlibbluray=enabled \
 	-Dvulkan=disabled \
-	-Dlibmpv=true \
-	-Dcplayer=false \
 	-Dmanpage-build=disabled
 
 ninja -C $build -j$cores

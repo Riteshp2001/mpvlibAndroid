@@ -27,14 +27,108 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Build and publish release
+  prepare:
+    name: Resolve release sources
     runs-on: ubuntu-24.04
-
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      matrix: ${{ steps.sources.outputs.matrix }}
+      version_tag: ${{ steps.sources.outputs.version_tag }}
+      version_name: ${{ steps.sources.outputs.version_name }}
+      version_code: ${{ steps.sources.outputs.version_code }}
+      library_sha: ${{ steps.sources.outputs.library_sha }}
+      no_vulkan_sha: ${{ steps.sources.outputs.no_vulkan_sha }}
+      mpv_fongmi_sha: ${{ steps.sources.outputs.mpv_fongmi_sha }}
+
+    steps:
+      - name: Resolve release tag
+        id: tag
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION_TAG="${GITHUB_REF#refs/tags/}"
+          else
+            if [[ "${GITHUB_REF}" != refs/heads/library ]]; then
+              echo "Manual releases must be run from the library branch."
+              exit 1
+            fi
+            VERSION_TAG="${{ inputs.release_tag }}"
+          fi
+
+          if [[ -z "$VERSION_TAG" ]]; then
+            echo "Release tag is empty."
+            exit 1
+          fi
+
+          echo "version_tag=$VERSION_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.tag.outputs.version_tag }}
+
+      - name: Resolve and validate branch commits
+        id: sources
+        env:
+          VERSION_TAG: ${{ steps.tag.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+
+          git fetch --force origin \
+            refs/heads/library:refs/remotes/origin/library \
+            refs/heads/no-vulkan:refs/remotes/origin/no-vulkan \
+            refs/heads/mpv-fongmi:refs/remotes/origin/mpv-fongmi
+          git fetch --force --tags
+
+          bash buildscripts/version.sh validate-tag "$VERSION_TAG"
+
+          LIBRARY_SHA="$(git rev-list -n 1 "$VERSION_TAG")"
+          NO_VULKAN_SHA="$(git rev-parse refs/remotes/origin/no-vulkan)"
+          MPV_FONGMI_SHA="$(git rev-parse refs/remotes/origin/mpv-fongmi)"
+          VERSION_NAME="$(bash buildscripts/version.sh name)"
+          VERSION_CODE="$(bash buildscripts/version.sh code)"
+
+          if ! git merge-base --is-ancestor \
+              "$LIBRARY_SHA" refs/remotes/origin/library; then
+            echo "Tag '$VERSION_TAG' is not on the library branch."
+            exit 1
+          fi
+
+          MATRIX="$(jq -cn \
+            --arg library "$LIBRARY_SHA" \
+            --arg no_vulkan "$NO_VULKAN_SHA" \
+            --arg mpv_fongmi "$MPV_FONGMI_SHA" \
+            '{include: [
+              {variant: "library", label: "default Vulkan", artifact: "mpvlib", ref: $library},
+              {variant: "no-vulkan", label: "no Vulkan", artifact: "mpvlib-no-vulkan", ref: $no_vulkan},
+              {variant: "mpv-fongmi", label: "FongMi", artifact: "mpvlib-fongmi", ref: $mpv_fongmi}
+            ]}')"
+
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "version_tag=$VERSION_TAG" >> "$GITHUB_OUTPUT"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "library_sha=$LIBRARY_SHA" >> "$GITHUB_OUTPUT"
+          echo "no_vulkan_sha=$NO_VULKAN_SHA" >> "$GITHUB_OUTPUT"
+          echo "mpv_fongmi_sha=$MPV_FONGMI_SHA" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.label }} AAR
+    needs: prepare
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     env:
+      VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+      VERSION_NAME: ${{ needs.prepare.outputs.version_name }}
+      VERSION_CODE: ${{ needs.prepare.outputs.version_code }}
       CACHE_MODE: folder
       CACHE_FOLDER: ${{ github.workspace }}/gh-cache
 
@@ -53,51 +147,23 @@ jobs:
         -Dorg.gradle.configureondemand=true
 
     steps:
-      - name: Resolve release tag
-        id: resolve_tag
-        run: |
-          set -euo pipefail
-
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            VERSION_TAG="${GITHUB_REF#refs/tags/}"
-          else
-            VERSION_TAG="${{ inputs.release_tag }}"
-          fi
-
-          if [[ -z "$VERSION_TAG" ]]; then
-            echo "Release tag is empty."
-            exit 1
-          fi
-
-          echo "VERSION_TAG=$VERSION_TAG" >> "$GITHUB_ENV"
-          echo "version_tag=$VERSION_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout repository
+      - name: Checkout ${{ matrix.variant }}
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          ref: ${{ steps.resolve_tag.outputs.version_tag }}
+          ref: ${{ matrix.ref }}
 
-      - name: Verify release tag exists
+      - name: Apply release version to variant
         run: |
           set -euo pipefail
 
-          git fetch --force --tags
+          sed -i -E \
+            "s|^version = \".*\"$|version = \"${VERSION_NAME}\"|" \
+            app/build.gradle
+          sed -i -E \
+            "s|^([[:space:]]*versionCode[[:space:]]+)[0-9]+$|\1${VERSION_CODE}|" \
+            app/build.gradle
 
-          if ! git rev-parse "$VERSION_TAG" >/dev/null 2>&1; then
-            echo "Tag '$VERSION_TAG' does not exist."
-            echo "Create it first:"
-            echo "git tag $VERSION_TAG"
-            echo "git push origin $VERSION_TAG"
-            exit 1
-          fi
-
-          echo "Using release tag: $VERSION_TAG"
-
-      - name: Validate Semantic Version
-        run: |
           bash buildscripts/version.sh validate-tag "$VERSION_TAG"
-          echo "VERSION_NAME=$(bash buildscripts/version.sh name)" >> "$GITHUB_ENV"
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -112,8 +178,7 @@ jobs:
           python-version: "3.12"
 
       - name: Export CI environment variables
-        run: |
-          buildscripts/include/ci.sh export >> "$GITHUB_ENV"
+        run: buildscripts/include/ci.sh export >> "$GITHUB_ENV"
 
       - name: Restore Android SDK cache
         id: android-sdk-cache
@@ -138,10 +203,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .ccache/
-          key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
+          key: ccache-${{ runner.os }}-${{ matrix.variant }}-${{ matrix.ref }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ github.ref_name }}-
-            ccache-${{ runner.os }}-
+            ccache-${{ runner.os }}-${{ matrix.variant }}-
 
       - name: Install system dependencies
         run: |
@@ -189,17 +253,10 @@ jobs:
           path: gh-cache/
           key: native-prefix-${{ runner.os }}-${{ env.CACHE_IDENTIFIER }}
 
-      - name: Show ccache stats before build
-        run: |
-          ccache --zero-stats || true
-          ccache --show-stats || true
-
       - name: Build release AAR for all Android architectures
         run: |
           set -euxo pipefail
-
           unset ANDROID_SDK_ROOT
-
           cd buildscripts
 
           source include/build_config.sh
@@ -211,26 +268,26 @@ jobs:
 
           ./buildall.sh -n mpv-android
 
-      - name: Show ccache stats after build
+      - name: Show ccache stats
         if: always()
-        run: |
-          ccache --show-stats || true
+        run: ccache --show-stats || true
 
       - name: Save ccache
         if: always() && steps.ccache-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .ccache/
-          key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
+          key: ccache-${{ runner.os }}-${{ matrix.variant }}-${{ matrix.ref }}
 
-      - name: Stage release files
+      - name: Stage ${{ matrix.variant }} release files
+        env:
+          ARTIFACT_BASE: ${{ matrix.artifact }}
         run: |
           set -euxo pipefail
 
-          mkdir -p dist
-
           AAR_PATH="app/build/outputs/aar/app-release.aar"
-          RELEASE_AAR="dist/mpvlib-${VERSION_NAME}.aar"
+          RELEASE_AAR="dist/${ARTIFACT_BASE}-${VERSION_NAME}.aar"
+          mkdir -p dist
 
           if [ ! -f "$AAR_PATH" ]; then
             echo "AAR file not found at: $AAR_PATH"
@@ -239,102 +296,138 @@ jobs:
           fi
 
           cp "$AAR_PATH" "$RELEASE_AAR"
+          (cd dist && sha256sum "${ARTIFACT_BASE}-${VERSION_NAME}.aar" > "${ARTIFACT_BASE}-${VERSION_NAME}.aar.sha256")
 
-          sha256sum "$RELEASE_AAR" > "dist/mpvlib-${VERSION_NAME}.aar.sha256"
+      - name: Upload ${{ matrix.variant }} release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.variant }}
+          path: |
+            dist/${{ matrix.artifact }}-${{ env.VERSION_NAME }}.aar
+            dist/${{ matrix.artifact }}-${{ env.VERSION_NAME }}.aar.sha256
+          if-no-files-found: error
 
-      - name: Generate release notes from commit history
+  publish:
+    name: Publish three-variant release
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+      VERSION_NAME: ${{ needs.prepare.outputs.version_name }}
+
+    steps:
+      - name: Checkout tagged library source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.library_sha }}
+
+      - name: Download all release variants
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify all release files
         run: |
           set -euo pipefail
 
-          source buildscripts/include/build_config.sh
+          expected=(
+            "mpvlib-${VERSION_NAME}.aar"
+            "mpvlib-no-vulkan-${VERSION_NAME}.aar"
+            "mpvlib-fongmi-${VERSION_NAME}.aar"
+          )
+
+          for file in "${expected[@]}"; do
+            test -s "dist/$file"
+            test -s "dist/$file.sha256"
+            (cd dist && sha256sum -c "$file.sha256")
+          done
+
+      - name: Generate combined release notes
+        env:
+          LIBRARY_SHA: ${{ needs.prepare.outputs.library_sha }}
+          NO_VULKAN_SHA: ${{ needs.prepare.outputs.no_vulkan_sha }}
+          MPV_FONGMI_SHA: ${{ needs.prepare.outputs.mpv_fongmi_sha }}
+        run: |
+          set -euo pipefail
 
           RELEASE_NOTES="dist/release-notes-${VERSION_TAG}.md"
-
-          CURRENT_COMMIT="$(git rev-list -n 1 "$VERSION_TAG")"
           PREVIOUS_TAG="$(git describe --tags --abbrev=0 "${VERSION_TAG}^" 2>/dev/null || true)"
 
           {
             echo "# mpvlib ${VERSION_TAG}"
             echo ""
-            echo "## Release Artifact"
+            echo "## AAR variants"
             echo ""
-            echo "- \`mpvlib-${VERSION_NAME}.aar\`"
-            echo "- \`mpvlib-${VERSION_NAME}.aar.sha256\`"
+            echo "- \`mpvlib-${VERSION_NAME}.aar\` — default Vulkan build"
+            echo "- \`mpvlib-no-vulkan-${VERSION_NAME}.aar\` — Vulkan disabled"
+            echo "- \`mpvlib-fongmi-${VERSION_NAME}.aar\` — FongMi native profile"
+            echo ""
+            echo "Each AAR has a matching \`.sha256\` checksum file."
+            echo ""
+            echo "## Source commits"
+            echo ""
+            echo "- \`library\`: \`${LIBRARY_SHA}\`"
+            echo "- \`no-vulkan\`: \`${NO_VULKAN_SHA}\`"
+            echo "- \`mpv-fongmi\`: \`${MPV_FONGMI_SHA}\`"
             echo ""
             echo "## Included Android ABIs"
             echo ""
-            echo "- \`armeabi-v7a\` / \`armv7l\`"
-            echo "- \`arm64-v8a\` / \`arm64\`"
-            if [ "$ENABLE_X86_ARCH" = "true" ]; then
-              echo "- \`x86\`"
-              echo "- \`x86_64\`"
-            fi
+            echo "- \`armeabi-v7a\`"
+            echo "- \`arm64-v8a\`"
+            echo "- \`x86\`"
+            echo "- \`x86_64\`"
             echo ""
-            echo "## Build Environment"
-            echo ""
-            echo "- Runner: \`${RUNNER_OS}\`"
-            echo "- Ubuntu: \`24.04\`"
-            echo "- Java: \`17 / Temurin\`"
-            echo "- Repository: \`${GITHUB_REPOSITORY}\`"
-            echo "- Tag: \`${VERSION_TAG}\`"
-            echo "- Commit: \`${CURRENT_COMMIT}\`"
-            echo ""
-
             echo "## Checksums"
             echo ""
             echo '```text'
-            cat "dist/mpvlib-${VERSION_NAME}.aar.sha256"
+            cat dist/*.aar.sha256
             echo '```'
+            echo ""
+            echo "## Commit history"
             echo ""
 
             if [[ -n "$PREVIOUS_TAG" ]]; then
-              echo "## Commit History"
-              echo ""
               echo "Changes from \`${PREVIOUS_TAG}\` to \`${VERSION_TAG}\`:"
               echo ""
-
-              if git log --oneline "${PREVIOUS_TAG}..${VERSION_TAG}" | grep -q .; then
-                git log \
-                  --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H)) by %an" \
-                  "${PREVIOUS_TAG}..${VERSION_TAG}"
-              else
-                echo "- No commits found between \`${PREVIOUS_TAG}\` and \`${VERSION_TAG}\`."
-              fi
+              git log \
+                --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H)) by %an" \
+                "${PREVIOUS_TAG}..${VERSION_TAG}"
             else
-              echo "## Commit History"
-              echo ""
-              echo "No previous tag found. Showing commits reachable from \`${VERSION_TAG}\`:"
-              echo ""
-
               git log \
                 --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H)) by %an" \
                 "$VERSION_TAG"
             fi
-
             echo ""
           } > "$RELEASE_NOTES"
 
           cat "$RELEASE_NOTES"
 
-      - name: Upload release files to workflow artifacts
+      - name: Upload combined workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mpvlib-${{ env.VERSION_NAME }}
+          name: mpvlib-${{ env.VERSION_NAME }}-all-variants
           path: |
-            dist/mpvlib-${{ env.VERSION_NAME }}.aar
-            dist/mpvlib-${{ env.VERSION_NAME }}.aar.sha256
+            dist/*.aar
+            dist/*.aar.sha256
             dist/release-notes-${{ env.VERSION_TAG }}.md
           if-no-files-found: error
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION_TAG }}
           name: mpvlib ${{ env.VERSION_TAG }}
           body_path: dist/release-notes-${{ env.VERSION_TAG }}.md
           files: |
-            dist/mpvlib-${{ env.VERSION_NAME }}.aar
-            dist/mpvlib-${{ env.VERSION_NAME }}.aar.sha256
+            dist/*.aar
+            dist/*.aar.sha256
             dist/release-notes-${{ env.VERSION_TAG }}.md
-          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || true }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
           prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
