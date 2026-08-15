@@ -89,6 +89,13 @@ HEREDOC
 # libplacebo - use GitHub mirror (haasn/libplacebo)
 [ ! -d libplacebo ] && git clone --recursive https://github.com/haasn/libplacebo
 
+# curl
+if [ ! -d curl ]; then
+	mkdir curl
+	$WGET https://curl.se/download/curl-$v_curl.tar.gz -O - | \
+		tar -xz -C curl --strip-components=1
+fi
+
 # mpv
 [ ! -d mpv ] && git clone https://github.com/mpv-player/mpv
 if ! git -C mpv apply --reverse --check ../../patches/mpv_video_shaders.patch 2>/dev/null; then
