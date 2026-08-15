@@ -296,7 +296,7 @@ jobs:
           fi
 
           cp "$AAR_PATH" "$RELEASE_AAR"
-          sha256sum "$RELEASE_AAR" > "${RELEASE_AAR}.sha256"
+          (cd dist && sha256sum "${ARTIFACT_BASE}-${VERSION_NAME}.aar" > "${ARTIFACT_BASE}-${VERSION_NAME}.aar.sha256")
 
       - name: Upload ${{ matrix.variant }} release files
         uses: actions/upload-artifact@v4
