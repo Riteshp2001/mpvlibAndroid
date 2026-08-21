@@ -11,6 +11,10 @@ else
 	exit 255
 fi
 
+if ! git apply --reverse --check ../../patches/ffmpeg_force_mpegts.patch 2>/dev/null; then
+	git apply ../../patches/ffmpeg_force_mpegts.patch
+fi
+
 mkdir -p _build$ndk_suffix
 cd _build$ndk_suffix
 

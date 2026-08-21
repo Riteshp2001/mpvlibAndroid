@@ -13,6 +13,10 @@ else
 	exit 255
 fi
 
+if ! git apply --reverse --check ../../patches/mpv_video_shaders.patch 2>/dev/null; then
+	git apply ../../patches/mpv_video_shaders.patch
+fi
+
 # Android provides Vulkan, but no pkgconfig file.
 mkdir -p "$prefix_dir"/lib/pkgconfig
 cat >"$prefix_dir"/lib/pkgconfig/vulkan.pc <<END
