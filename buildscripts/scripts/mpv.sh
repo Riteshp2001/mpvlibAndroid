@@ -13,6 +13,10 @@ else
 	exit 255
 fi
 
+if ! git apply --reverse --check ../../patches/mpv_video_shaders.patch 2>/dev/null; then
+	git apply ../../patches/mpv_video_shaders.patch
+fi
+
 case "$prefix_dir" in
 	"$DIR"/prefix/*) ;;
 	*) echo "Invalid build prefix: $prefix_dir" >&2; exit 1 ;;
