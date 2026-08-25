@@ -17,6 +17,10 @@ if ! git apply --reverse --check ../../patches/mpv_video_shaders.patch 2>/dev/nu
 	git apply ../../patches/mpv_video_shaders.patch
 fi
 
+if ! git apply --reverse --check ../../patches/mpv_android_fdsan_fork.patch 2>/dev/null; then
+	git apply ../../patches/mpv_android_fdsan_fork.patch
+fi
+
 # Android provides Vulkan, but no pkgconfig file.
 mkdir -p "$prefix_dir"/lib/pkgconfig
 cat >"$prefix_dir"/lib/pkgconfig/vulkan.pc <<END
@@ -90,7 +94,21 @@ meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
 	-Dvulkan=enabled \
 	-Dmanpage-build=disabled
 
+if ! grep -Eq '^#define HAVE_CLONE 0$' "$build/config.h"; then
+	echo "Android libmpv configured with unsafe HAVE_CLONE; refusing to build." >&2
+	exit 1
+fi
+
 ninja -C $build -j$cores
+
+if readelf --wide --dyn-syms "$build/libmpv.so" | grep -Eq '[[:space:]]clone@LIBC([[:space:]]|$)'; then
+	echo "Android libmpv still imports clone@LIBC; refusing to package it." >&2
+	exit 1
+fi
+if ! readelf --wide --dyn-syms "$build/libmpv.so" | grep -Eq '[[:space:]]fork@LIBC([[:space:]]|$)'; then
+	echo "Android libmpv does not import fork@LIBC; subprocess fallback is missing." >&2
+	exit 1
+fi
 
 if [ -f $build/libmpv.a ]; then
 	echo >&2 "Meson produced static libmpv.a instead of shared libmpv.so, forcing rebuild."
