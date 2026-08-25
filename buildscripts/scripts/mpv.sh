@@ -17,6 +17,10 @@ if ! git apply --reverse --check ../../patches/mpv_video_shaders.patch 2>/dev/nu
 	git apply ../../patches/mpv_video_shaders.patch
 fi
 
+if ! git apply --reverse --check ../../patches/mpv_android_fdsan_fork.patch 2>/dev/null; then
+	git apply ../../patches/mpv_android_fdsan_fork.patch
+fi
+
 case "$prefix_dir" in
 	"$DIR"/prefix/*) ;;
 	*) echo "Invalid build prefix: $prefix_dir" >&2; exit 1 ;;
@@ -87,7 +91,21 @@ meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
 	-Dvulkan=disabled \
 	-Dmanpage-build=disabled
 
+if ! grep -Eq '^#define HAVE_CLONE 0$' "$build/config.h"; then
+	echo "Android libmpv configured with unsafe HAVE_CLONE; refusing to build." >&2
+	exit 1
+fi
+
 ninja -C $build -j$cores
+
+if readelf --wide --dyn-syms "$build/libmpv.so" | grep -Eq '[[:space:]]clone@LIBC([[:space:]]|$)'; then
+	echo "Android libmpv still imports clone@LIBC; refusing to package it." >&2
+	exit 1
+fi
+if ! readelf --wide --dyn-syms "$build/libmpv.so" | grep -Eq '[[:space:]]fork@LIBC([[:space:]]|$)'; then
+	echo "Android libmpv does not import fork@LIBC; subprocess fallback is missing." >&2
+	exit 1
+fi
 
 if readelf -d "$build/libmpv.so" 2>/dev/null | grep -Fq libvulkan.so; then
 	echo "Vulkan linkage detected in $build/libmpv.so; refusing to package it." >&2
