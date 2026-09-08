@@ -42,6 +42,14 @@ $BUILD/scripts/write_versions.sh $ndk_suffix
 PREFIX32=$prefix32 PREFIX64=$prefix64 PREFIX_X64=$prefix_x64 PREFIX_X86=$prefix_x86 \
 ndk-build -C app/src/main -j$cores
 
+### Java parts
+# Android's gradle plugin needs both of these to correctly strip libraries.
+# We could pass them directly to Gradle but by using this file it will persist
+# inside Android Studio too.
+printf '%s\n' \
+	"# This file is automatically written by the build scripts, and read using Gradle" \
+	"ndkVersion=$v_ndk_n" "ndkRoot=$ANDROID_NDK_ROOT" >ndk.properties
+
 targets=(assembleDebug)
 if [ -z "$DONT_BUILD_RELEASE" ]; then
 	targets+=(assembleRelease)

@@ -152,6 +152,14 @@ jobs:
         with:
           ref: ${{ matrix.ref }}
 
+      - name: Restore bundled Freetype source
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/${VERSION_TAG}:refs/tags/${VERSION_TAG}"
+          git archive "${VERSION_TAG}" buildscripts/sources/freetype-2.14.3.tar.gz | tar -x
+
       - name: Apply release version to variant
         run: |
           set -euo pipefail

@@ -30,8 +30,12 @@ fi
 # freetype2
 if [ ! -d freetype2 ]; then
 	mkdir freetype2
-	$WGET https://download.savannah.gnu.org/releases/freetype/freetype-$v_freetype.tar.gz -O - | \
-		tar -xz -C freetype2 --strip-components=1
+		freetype_archive="../sources/freetype-$v_freetype.tar.gz"
+	if [ ! -f "$freetype_archive" ]; then
+		echo "Missing local Freetype archive: $freetype_archive" >&2
+		exit 1
+	fi
+	tar -xz -f "$freetype_archive" -C freetype2 --strip-components=1
 fi
 
 # fribidi - use vX.Y.Z tag format for releases
