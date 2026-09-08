@@ -14,6 +14,27 @@ getdeps () {
 	echo ${!varname}
 }
 
+wasbuilt () {
+	# don't use associative arrays to support bash 3 on macOS (thanks Tim Apple)
+	varname="built_${1//-/_}"
+	return "${!varname:-1}"
+}
+
+markbuilt () {
+	varname="built_${1//-/_}"
+	declare -g "$varname=0"
+}
+
+loadndk () {
+	local ndk="$PWD/sdk/android-ndk-${v_ndk}"
+	local toolchain=$(echo "$ndk/toolchains/llvm/prebuilt/"*)
+	if [ ! -d "$toolchain" ]; then
+		echo "Can't find toolchain inside NDK" >&2
+		return 1
+	fi
+	export ANDROID_NDK_ROOT="$ndk"
+	export PATH="$toolchain/bin:$ndk:$PWD/sdk/bin:$PATH"
+}
 loadarch () {
 	unset CC CXX CPATH LIBRARY_PATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH
 	unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
