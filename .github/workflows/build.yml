@@ -24,7 +24,7 @@ jobs:
       contents: read
 
     env:
-      MPV_GIT_URL: https://github.com/FongMi/mpv
+      MPV_GIT_URL: https://github.com/ijuniorfu/fm-mpv.git
       MPV_GIT_REF: fongmi
       FFMPEG_GIT_URL: https://github.com/FongMi/FFmpeg.git
       LIBPLACEBO_GIT_URL: https://github.com/FongMi/libplacebo.git

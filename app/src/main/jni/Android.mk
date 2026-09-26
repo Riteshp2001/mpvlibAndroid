@@ -66,8 +66,8 @@ include $(PREBUILT_SHARED_LIBRARY)
 include $(CLEAR_VARS)
 
 LOCAL_MODULE    := libplayer
-LOCAL_CFLAGS    := -Werror
-LOCAL_CPPFLAGS  += -std=c++11
+LOCAL_CFLAGS    := -Werror -DHAS_LSFG=1
+LOCAL_CPPFLAGS  += -std=c++17 -DHAS_LSFG=1
 LOCAL_SRC_FILES := \
 	main.cpp \
 	render.cpp \
@@ -76,8 +76,12 @@ LOCAL_SRC_FILES := \
 	property.cpp \
 	event.cpp \
 	node.cpp \
-	thumbnail.cpp
-LOCAL_LDLIBS    := -llog -lGLESv3 -lEGL -latomic -ljnigraphics
+	thumbnail.cpp \
+	framegen_native.cpp \
+	frame_gen/lossless_dll.cpp \
+	frame_gen/frame_gen.cpp
+# Vulkan is required for LSFG compute shaders
+LOCAL_LDLIBS    := -llog -lGLESv3 -lEGL -latomic -ljnigraphics -lvulkan
 LOCAL_SHARED_LIBRARIES := swscale avcodec avformat avutil mpv
 
 include $(BUILD_SHARED_LIBRARY)

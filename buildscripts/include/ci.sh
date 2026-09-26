@@ -96,7 +96,7 @@ build_prefix() {
 }
 
 export WGET="wget --progress=bar:force"
-: "${MPV_GIT_URL:=https://github.com/FongMi/mpv}"
+: "${MPV_GIT_URL:=https://github.com/ijuniorfu/fm-mpv.git}"
 : "${MPV_GIT_REF:=fongmi}"
 
 if [[ "$1" == export || "$1" == install ]]; then
