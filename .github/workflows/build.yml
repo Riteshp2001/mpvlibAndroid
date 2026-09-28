@@ -4,11 +4,13 @@ on:
   push:
     branches:
       - "**"
+      - "!mpv-fongmi"
     tags-ignore:
       - "**"
   pull_request:
     branches:
       - "**"
+      - "!mpv-fongmi"
   workflow_dispatch:
 
 concurrency:
@@ -18,6 +20,7 @@ concurrency:
 jobs:
   build:
     name: Build Android AAR
+    if: github.ref_name != 'mpv-fongmi' && github.head_ref != 'mpv-fongmi' && github.base_ref != 'mpv-fongmi'
     runs-on: ubuntu-24.04
 
     permissions:
