@@ -26,6 +26,12 @@ concurrency:
   group: release-${{ github.ref }}-${{ inputs.release_tag || '' }}
   cancel-in-progress: false
 
+env:
+  FROZEN_FONGMI_TAG: v1.0.9
+  FROZEN_FONGMI_VERSION: 1.0.9
+  FROZEN_FONGMI_SHA: c1ac6f47d7c2d1007de0731a6fb6395eda925213
+  FROZEN_FONGMI_SHA256: 867b517a46181e7f9f617653538f9e0d01a8a8dcc7edd6aaed1c6d9f68c9ba9a
+
 jobs:
   prepare:
     name: Resolve release sources
@@ -39,7 +45,6 @@ jobs:
       version_code: ${{ steps.sources.outputs.version_code }}
       library_sha: ${{ steps.sources.outputs.library_sha }}
       no_vulkan_sha: ${{ steps.sources.outputs.no_vulkan_sha }}
-      mpv_fongmi_sha: ${{ steps.sources.outputs.mpv_fongmi_sha }}
 
     steps:
       - name: Resolve release tag
@@ -79,15 +84,13 @@ jobs:
 
           git fetch --force origin \
             refs/heads/library:refs/remotes/origin/library \
-            refs/heads/no-vulkan:refs/remotes/origin/no-vulkan \
-            refs/heads/mpv-fongmi:refs/remotes/origin/mpv-fongmi
+            refs/heads/no-vulkan:refs/remotes/origin/no-vulkan
           git fetch --force --tags
 
           bash buildscripts/version.sh validate-tag "$VERSION_TAG"
 
           LIBRARY_SHA="$(git rev-list -n 1 "$VERSION_TAG")"
           NO_VULKAN_SHA="$(git rev-parse refs/remotes/origin/no-vulkan)"
-          MPV_FONGMI_SHA="$(git rev-parse refs/remotes/origin/mpv-fongmi)"
           VERSION_NAME="$(bash buildscripts/version.sh name)"
           VERSION_CODE="$(bash buildscripts/version.sh code)"
 
@@ -100,11 +103,9 @@ jobs:
           MATRIX="$(jq -cn \
             --arg library "$LIBRARY_SHA" \
             --arg no_vulkan "$NO_VULKAN_SHA" \
-            --arg mpv_fongmi "$MPV_FONGMI_SHA" \
             '{include: [
               {variant: "library", label: "default Vulkan", artifact: "mpvlib", ref: $library},
-              {variant: "no-vulkan", label: "no Vulkan", artifact: "mpvlib-no-vulkan", ref: $no_vulkan},
-              {variant: "mpv-fongmi", label: "FongMi", artifact: "mpvlib-fongmi", ref: $mpv_fongmi}
+              {variant: "no-vulkan", label: "no Vulkan", artifact: "mpvlib-no-vulkan", ref: $no_vulkan}
             ]}')"
 
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
@@ -113,7 +114,6 @@ jobs:
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "library_sha=$LIBRARY_SHA" >> "$GITHUB_OUTPUT"
           echo "no_vulkan_sha=$NO_VULKAN_SHA" >> "$GITHUB_OUTPUT"
-          echo "mpv_fongmi_sha=$MPV_FONGMI_SHA" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.label }} AAR
@@ -341,6 +341,20 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Restore frozen FongMi AAR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          filename="mpvlib-fongmi-${FROZEN_FONGMI_VERSION}.aar"
+          gh release download "$FROZEN_FONGMI_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$filename" \
+            --dir dist
+          echo "${FROZEN_FONGMI_SHA256}  dist/$filename" | sha256sum -c -
+          (cd dist && sha256sum "$filename" > "$filename.sha256")
+
       - name: Verify all release files
         run: |
           set -euo pipefail
@@ -348,7 +362,7 @@ jobs:
           expected=(
             "mpvlib-${VERSION_NAME}.aar"
             "mpvlib-no-vulkan-${VERSION_NAME}.aar"
-            "mpvlib-fongmi-${VERSION_NAME}.aar"
+            "mpvlib-fongmi-${FROZEN_FONGMI_VERSION}.aar"
           )
 
           for file in "${expected[@]}"; do
@@ -361,7 +375,6 @@ jobs:
         env:
           LIBRARY_SHA: ${{ needs.prepare.outputs.library_sha }}
           NO_VULKAN_SHA: ${{ needs.prepare.outputs.no_vulkan_sha }}
-          MPV_FONGMI_SHA: ${{ needs.prepare.outputs.mpv_fongmi_sha }}
         run: |
           set -euo pipefail
 
@@ -375,15 +388,16 @@ jobs:
             echo ""
             echo "- \`mpvlib-${VERSION_NAME}.aar\` — default Vulkan build"
             echo "- \`mpvlib-no-vulkan-${VERSION_NAME}.aar\` — Vulkan disabled"
-            echo "- \`mpvlib-fongmi-${VERSION_NAME}.aar\` — FongMi native profile"
+            echo "- \`mpvlib-fongmi-${FROZEN_FONGMI_VERSION}.aar\` - frozen FongMi build reused from \`${FROZEN_FONGMI_TAG}\`"
             echo ""
             echo "Each AAR has a matching \`.sha256\` checksum file."
+            echo "The FongMi codebase is frozen and is not rebuilt for new releases."
             echo ""
             echo "## Source commits"
             echo ""
             echo "- \`library\`: \`${LIBRARY_SHA}\`"
             echo "- \`no-vulkan\`: \`${NO_VULKAN_SHA}\`"
-            echo "- \`mpv-fongmi\`: \`${MPV_FONGMI_SHA}\`"
+            echo "- \`mpv-fongmi\`: \`${FROZEN_FONGMI_SHA}\` (frozen artifact from \`${FROZEN_FONGMI_TAG}\`)"
             echo ""
             echo "## Included Android ABIs"
             echo ""
