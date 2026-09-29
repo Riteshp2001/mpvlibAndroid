@@ -67,7 +67,7 @@ include $(CLEAR_VARS)
 
 LOCAL_MODULE    := libplayer
 LOCAL_CFLAGS    := -Werror -DHAS_LSFG=1
-LOCAL_CPPFLAGS  += -std=c++17 -DHAS_LSFG=1
+LOCAL_CPPFLAGS  += -std=c++20 -DHAS_LSFG=1
 LOCAL_SRC_FILES := \
 	main.cpp \
 	render.cpp \

@@ -222,11 +222,11 @@ LosslessStatus BuildShaderCache() {
     std::filesystem::create_directories(GetShaderCachePath().parent_path());
     std::ofstream out(GetShaderCachePath(), std::ios::binary);
     if (!out) return LosslessStatus::CacheUnusable;
-    out.write(reinterpret_cast<char*>(&hdr), sizeof(hdr));
+    out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
     for (auto& [id, blob] : resources) {
         uint32_t sz = blob.size();
-        out.write(reinterpret_cast<char*>(&id), sizeof(id));
-        out.write(reinterpret_cast<char*>(&sz), sizeof(sz));
+        out.write(reinterpret_cast<const char*>(&id), sizeof(id));
+        out.write(reinterpret_cast<const char*>(&sz), sizeof(sz));
         out.write(reinterpret_cast<const char*>(blob.data()), sz);
     }
     LOGI("Shader cache built: %zu shaders", resources.size());

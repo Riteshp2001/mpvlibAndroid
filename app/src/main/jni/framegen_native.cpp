@@ -71,7 +71,7 @@ JNIEXPORT jstring JNICALL
 Java_app_gyrolet_mpvrx_ui_player_framegen_FrameGenNative_getLosslessDllPath(
         JNIEnv* env, jclass) {
 #ifdef HAS_LSFG
-    return env->NewStringUTF(FrameGen::GetLosslessDllPath().c_str());
+    return env->NewStringUTF(FrameGen::GetLosslessDllPath().string().c_str());
 #else
     return env->NewStringUTF("");
 #endif
@@ -114,6 +114,30 @@ Java_app_gyrolet_mpvrx_ui_player_framegen_FrameGenNative_setFrameGenEnabled(
     g_frame_gen_enabled.store((bool)enabled);
     g_frame_gen_multiplier.store(clamped);
     LOGI("Frame gen %s × %d", enabled ? "ON" : "OFF", clamped);
+}
+
+JNIEXPORT jstring JNICALL
+Java_app_gyrolet_mpvrx_ui_player_framegen_FrameGenNative_getGpuModel(
+        JNIEnv* env, jclass) {
+    return env->NewStringUTF("Vulkan Compatible GPU");
+}
+
+JNIEXPORT jstring JNICALL
+Java_app_gyrolet_mpvrx_ui_player_framegen_FrameGenNative_getVulkanDriverVersion(
+        JNIEnv* env, jclass) {
+    return env->NewStringUTF("");
+}
+
+JNIEXPORT jstring JNICALL
+Java_app_gyrolet_mpvrx_ui_player_framegen_FrameGenNative_getVulkanApiVersion(
+        JNIEnv* env, jclass) {
+    return env->NewStringUTF("1.1.0");
+}
+
+JNIEXPORT jboolean JNICALL
+Java_app_gyrolet_mpvrx_ui_player_framegen_FrameGenNative_isGpuHardwareSupported(
+        JNIEnv*, jclass) {
+    return JNI_TRUE;
 }
 
 } // extern "C"

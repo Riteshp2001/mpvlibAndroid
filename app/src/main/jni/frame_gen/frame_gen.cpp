@@ -36,10 +36,7 @@ bool VulkanSupported() {
 #endif
 }
 
-// Helpers forwarding lossless_dll namespace to FrameGen namespace
-int  GetInstalledLosslessStatus() { return (int)FrameGen::GetInstalledLosslessStatus(); }
-int  BuildShaderCache()           { return (int)FrameGen::BuildShaderCache(); }
-bool RemoveInstalledLosslessDll() { return FrameGen::RemoveInstalledLosslessDll(); }
+
 
 static VkShaderModule MakeShaderModule(VkDevice dev, const std::vector<uint32_t>& spv) {
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};

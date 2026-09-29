@@ -86,12 +86,6 @@ private:
 // Global singleton accessed from render.cpp
 VulkanFrameGen& GetFrameGen();
 
-// Forwarded from lossless_dll.h
 bool        VulkanSupported();
-std::string GetLosslessDllPath();
-std::string GetShaderCachePath();
-int         GetInstalledLosslessStatus(); // LosslessStatus enum value
-int         BuildShaderCache();
-bool        RemoveInstalledLosslessDll();
 
 } // namespace FrameGen
