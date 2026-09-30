@@ -148,11 +148,11 @@ Utils.VERSIONS.dependencies.forEach { (name, version) ->
 | MuJS (JavaScript) | 1.3.9 |
 | MbedTLS | 3.6.7 |
 | FongMi extensions | libaribcaption, curl, libbluray, iconv, uchardet, libarchive, dvdnav, rubberband |
-| HarfBuzz | 14.2.1 |
+| HarfBuzz | 14.4.0 |
 | FreeType | 2.14.3 |
 | FriBidi | 1.0.16 |
-| libunibreak | 7.0 |
-| Android NDK | r29 |
+| libunibreak | 8.0 |
+| Android NDK | r30 |
 | Min API | 24 (Android 7.0) |
 
 ## License
