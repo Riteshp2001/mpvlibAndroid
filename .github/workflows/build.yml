@@ -4,13 +4,11 @@ on:
   push:
     branches:
       - "**"
-      - "!mpv-fongmi"
     tags-ignore:
       - "**"
   pull_request:
     branches:
       - "**"
-      - "!mpv-fongmi"
   workflow_dispatch:
 
 concurrency:
@@ -20,14 +18,13 @@ concurrency:
 jobs:
   build:
     name: Build Android AAR
-    if: github.ref_name != 'mpv-fongmi' && github.head_ref != 'mpv-fongmi' && github.base_ref != 'mpv-fongmi'
     runs-on: ubuntu-24.04
 
     permissions:
       contents: read
 
     env:
-      MPV_GIT_URL: https://github.com/FongMi/mpv
+      MPV_GIT_URL: https://github.com/ijuniorfu/fm-mpv.git
       MPV_GIT_REF: fongmi
       FFMPEG_GIT_URL: https://github.com/FongMi/FFmpeg.git
       LIBPLACEBO_GIT_URL: https://github.com/FongMi/libplacebo.git

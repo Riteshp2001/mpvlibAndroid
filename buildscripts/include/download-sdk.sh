@@ -15,7 +15,7 @@ if [ "$os" == "linux" ]; then
 		elif apt-get -v &>/dev/null; then
 			sudo apt-get install autoconf pkg-config libtool ninja-build \
 			    unzip wget meson python3 gperf nasm
-			sudo pip3 install meson
+			sudo pip3 install --break-system-packages meson
 		else
 			echo "Note: dependencies were not installed, you have to do that manually."
 		fi
@@ -89,7 +89,7 @@ fi
 
 # gas-preprocessor
 mkdir -p bin
-$WGET "https://github.com/FFmpeg/gas-preprocessor/raw/master/gas-preprocessor.pl" \
+[ -s bin/gas-preprocessor.pl ] || $WGET "https://github.com/FFmpeg/gas-preprocessor/raw/master/gas-preprocessor.pl" \
 	-O bin/gas-preprocessor.pl
 chmod +x bin/gas-preprocessor.pl
 

@@ -30,7 +30,7 @@ android_cmake_setup () {
 	local android_abi
 	android_abi=$(android_cmake_abi)
 
-	cmake -S "$source_dir" -B "$build_dir" \
+	cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -S "$source_dir" -B "$build_dir" \
 		-DCMAKE_TOOLCHAIN_FILE="$ndk_dir/build/cmake/android.toolchain.cmake" \
 		-DANDROID_ABI="$android_abi" \
 		-DANDROID_PLATFORM="android-${android_api:-24}" \
