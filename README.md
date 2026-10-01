@@ -18,6 +18,7 @@ This library brings the full power of mpv to Android — play any video, generat
 - 200+ formats supported (mp4, mkv, avi, mov, webm, flac, mp3, gif, etc.)
 - 15+ network protocols: http, https, rtmp, rtmps, rtp, rtsp, mms, tcp, udp, and more
 - Android Surface rendering with hardware acceleration
+- SOFA HRTF spatial audio through FFmpeg's libmysofa-powered `sofalizer` filter
 
 ### 🖼️ Thumbnail Generation
 - Two engines: mpv-based and direct FFmpeg
@@ -144,6 +145,7 @@ Utils.VERSIONS.dependencies.forEach { (name, version) ->
 | shaderc | Android NDK bundled version |
 | libass | latest |
 | dav1d | latest |
+| libmysofa | 1.3.5 |
 | Lua | 5.2.4 |
 | MuJS (JavaScript) | 1.3.9 |
 | MbedTLS | 3.6.7 |
