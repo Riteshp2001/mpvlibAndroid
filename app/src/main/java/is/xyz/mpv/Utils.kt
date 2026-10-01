@@ -23,7 +23,7 @@ import kotlin.math.abs
 object Utils {
     fun copyAssets(context: Context) {
         val assetManager = context.assets
-        val files = arrayOf("cacert.pem")
+        val files = arrayOf("subfont.ttf", "cacert.pem")
         val configDir = context.filesDir.path
         for (filename in files) {
             var ins: InputStream? = null
@@ -47,9 +47,6 @@ object Utils {
                 out?.close()
             }
         }
-
-        // we used to ship this, but it's no longer needed
-        File("$configDir/subfont.ttf").delete()
     }
 
     fun findRealPath(fd: Int): String? {
