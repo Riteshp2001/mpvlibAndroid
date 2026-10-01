@@ -87,6 +87,7 @@ fi
 LIBPLACEBO_VERSION=$(pc_version libplacebo)
 LIBASS_VERSION=$(pc_version libass)
 DAV1D_VERSION=$(pc_version dav1d)
+LIBMYSOFA_VERSION=$(pc_version libmysofa)
 
 # Keep FFmpeg's release version separate from libavcodec's ABI version.
 FFMPEG_VERSION=${v_ci_ffmpeg#n}
@@ -113,6 +114,7 @@ require_version libavcodec "$LIBAVCODEC_VERSION"
 require_version libplacebo "$LIBPLACEBO_VERSION"
 require_version libass "$LIBASS_VERSION"
 require_version dav1d "$DAV1D_VERSION"
+require_version libmysofa "$LIBMYSOFA_VERSION"
 require_version MbedTLS "$MBEDTLS_VERSION"
 require_version Lua "$LUA_VERSION"
 require_version MuJS "$MUJS_VERSION"
@@ -167,6 +169,7 @@ write_version libAvcodec "$LIBAVCODEC_VERSION"
 write_version libPlacebo "$LIBPLACEBO_VERSION"
 write_version libAss "$LIBASS_VERSION"
 write_version dav1d "$DAV1D_VERSION"
+write_version libMySofa "$LIBMYSOFA_VERSION"
 write_version mbedTls "$MBEDTLS_VERSION"
 write_version lua "$LUA_VERSION"
 write_version muJs "$MUJS_VERSION"

@@ -66,6 +66,13 @@ if [ ! -d libxml2 ]; then
 		tar -xz -C libxml2 --strip-components=1
 fi
 
+# libmysofa
+if [ ! -d libmysofa ]; then
+	mkdir libmysofa
+	$WGET https://github.com/hoene/libmysofa/archive/refs/tags/v${v_libmysofa}.tar.gz -O - | \
+		tar -xz -C libmysofa --strip-components=1
+fi
+
 # libaribcaption
 if [ ! -d libaribcaption ]; then
 	mkdir libaribcaption
