@@ -188,6 +188,12 @@ jobs:
       - name: Export CI environment variables
         run: buildscripts/include/ci.sh export >> "$GITHUB_ENV"
 
+      - name: Validate FongMi build scripts and cache identity
+        if: matrix.variant == 'mpv-fongmi'
+        run: |
+          python3 buildscripts/tests/test-buildscripts.py --buildscripts buildscripts
+          python3 buildscripts/tests/test-ci-cache.py --buildscripts buildscripts
+
       - name: Restore Android SDK cache
         id: android-sdk-cache
         uses: actions/cache/restore@v4
@@ -220,6 +226,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             autoconf \
+            ant \
             automake \
             build-essential \
             ccache \
@@ -231,10 +238,12 @@ jobs:
             nasm \
             ninja-build \
             pkg-config \
+            patch \
             python3 \
             python3-pip \
             unzip \
-            wget
+            wget \
+            zip
 
       - name: Install Python build dependencies
         run: |
@@ -246,6 +255,14 @@ jobs:
           set -euxo pipefail
           mkdir -p "$CACHE_FOLDER"
           buildscripts/include/ci.sh install
+
+      - name: Validate FongMi JNI lifetime contracts
+        if: matrix.variant == 'mpv-fongmi'
+        run: |
+          python3 buildscripts/tests/test-jni-context-lifetime.py \
+            --mpv buildscripts/deps/mpv --jni "$JAVA_HOME/include"
+          python3 buildscripts/tests/test-jni-surface-lifetime.py \
+            --mpv buildscripts/deps/mpv --jni "$JAVA_HOME/include"
 
       - name: Save Android SDK cache
         if: steps.android-sdk-cache.outputs.cache-hit != 'true'
@@ -275,6 +292,21 @@ jobs:
           done
 
           ./buildall.sh -n mpv-android
+
+      - name: Export FongMi renderer SDK
+        if: matrix.variant == 'mpv-fongmi'
+        run: buildscripts/export-renderer-sdk.sh
+
+      - name: Setup Java 8 for FongMi BD-J
+        if: matrix.variant == 'mpv-fongmi'
+        uses: actions/setup-java@v4
+        with:
+          java-version: "8"
+          distribution: temurin
+
+      - name: Build matching FongMi BD-J jars
+        if: matrix.variant == 'mpv-fongmi'
+        run: bash buildscripts/build-bdj-jars.sh
 
       - name: Show ccache stats
         if: always()
@@ -306,13 +338,38 @@ jobs:
           cp "$AAR_PATH" "$RELEASE_AAR"
           (cd dist && sha256sum "${ARTIFACT_BASE}-${VERSION_NAME}.aar" > "${ARTIFACT_BASE}-${VERSION_NAME}.aar.sha256")
 
+      - name: Stage versioned FongMi support packages
+        if: matrix.variant == 'mpv-fongmi'
+        run: |
+          set -euo pipefail
+          source buildscripts/include/depinfo.sh
+
+          renderer_archive="mpvlib-fongmi-renderer-sdk-${VERSION_NAME}.zip"
+          bdj_archive="libbluray-bdj-${VERSION_NAME}.zip"
+          (cd build/renderer-sdk && zip -q -r "$GITHUB_WORKSPACE/dist/$renderer_archive" .)
+
+          bdj_output=build/bdj-release
+          mkdir -p "$bdj_output/jars"
+          cp buildscripts/build/bdj/libbluray-*.jar "$bdj_output/jars/"
+          for entry in armv7l:armeabi-v7a arm64:arm64-v8a; do
+            prefix="${entry%%:*}"
+            abi="${entry#*:}"
+            mkdir -p "$bdj_output/$abi/lib"
+            cp "buildscripts/prefix/$prefix/lib/libbluray.a" \
+              "buildscripts/prefix/$prefix/lib/libfreetype.a" "$bdj_output/$abi/lib/"
+          done
+          printf 'release.version=%s\nlibbluray.version=%s\nproducer.commit=%s\n' \
+            "$VERSION_NAME" "$v_libbluray" "${{ matrix.ref }}" > "$bdj_output/provenance.properties"
+          (cd "$bdj_output" && zip -q -r "$GITHUB_WORKSPACE/dist/$bdj_archive" .)
+          for archive in "$renderer_archive" "$bdj_archive"; do
+            (cd dist && sha256sum "$archive" > "$archive.sha256")
+          done
+
       - name: Upload ${{ matrix.variant }} release files
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.variant }}
-          path: |
-            dist/${{ matrix.artifact }}-${{ env.VERSION_NAME }}.aar
-            dist/${{ matrix.artifact }}-${{ env.VERSION_NAME }}.aar.sha256
+          path: dist/
           if-no-files-found: error
 
   publish:
@@ -349,6 +406,8 @@ jobs:
             "mpvlib-${VERSION_NAME}.aar"
             "mpvlib-no-vulkan-${VERSION_NAME}.aar"
             "mpvlib-fongmi-${VERSION_NAME}.aar"
+            "mpvlib-fongmi-renderer-sdk-${VERSION_NAME}.zip"
+            "libbluray-bdj-${VERSION_NAME}.zip"
           )
 
           for file in "${expected[@]}"; do
@@ -373,11 +432,17 @@ jobs:
             echo ""
             echo "## AAR variants"
             echo ""
-            echo "- \`mpvlib-${VERSION_NAME}.aar\` — default Vulkan build"
-            echo "- \`mpvlib-no-vulkan-${VERSION_NAME}.aar\` — Vulkan disabled"
-            echo "- \`mpvlib-fongmi-${VERSION_NAME}.aar\` — FongMi native profile"
+            echo "- \`mpvlib-${VERSION_NAME}.aar\`: default Vulkan build"
+            echo "- \`mpvlib-no-vulkan-${VERSION_NAME}.aar\`: Vulkan disabled"
+            echo "- \`mpvlib-fongmi-${VERSION_NAME}.aar\`: FongMi native profile"
             echo ""
-            echo "Each AAR has a matching \`.sha256\` checksum file."
+            echo "## FongMi support packages"
+            echo ""
+            echo "- \`mpvlib-fongmi-renderer-sdk-${VERSION_NAME}.zip\`: ARMv7/ARM64 libplacebo headers, static libraries and provenance."
+            echo "- \`libbluray-bdj-${VERSION_NAME}.zip\`: matching BD-J jars and ARMv7/ARM64 native build inputs."
+            echo ""
+            echo "Support packages are optional native integration inputs, not additional AAR dependencies. BD-J requires a compatible Java runtime integration."
+            echo "Each AAR and ZIP has a matching \`.sha256\` checksum file."
             echo ""
             echo "## Source commits"
             echo ""
@@ -395,7 +460,7 @@ jobs:
             echo "## Checksums"
             echo ""
             echo '```text'
-            cat dist/*.aar.sha256
+            cat dist/*.sha256
             echo '```'
             echo ""
             echo "## Commit history"
@@ -423,7 +488,8 @@ jobs:
           name: mpvlib-${{ env.VERSION_NAME }}-all-variants
           path: |
             dist/*.aar
-            dist/*.aar.sha256
+            dist/*.zip
+            dist/*.sha256
             dist/release-notes-${{ env.VERSION_TAG }}.md
           if-no-files-found: error
 
@@ -435,7 +501,8 @@ jobs:
           body_path: dist/release-notes-${{ env.VERSION_TAG }}.md
           files: |
             dist/*.aar
-            dist/*.aar.sha256
+            dist/*.zip
+            dist/*.sha256
             dist/release-notes-${{ env.VERSION_TAG }}.md
           draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
           prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
