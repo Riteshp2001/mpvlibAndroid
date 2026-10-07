@@ -1,0 +1,40 @@
+diff --git a/src/dvdnav.c b/src/dvdnav.c
+--- a/src/dvdnav.c
++++ b/src/dvdnav.c
+@@ -1161,4 +1161,26 @@
+   }
+
++  /* Menu stream routing can synthesize physical 0 without an enabled PGC
++   * control. The menu domain's IFO declares whether that audio exists. */
++  if (stream_type == DVD_AUDIO_STREAM &&
++      this->vm->state.domain != DVD_DOMAIN_VTSTitle) {
++    int8_t count;
++    switch (this->vm->state.domain) {
++    case DVD_DOMAIN_VTSMenu:
++      count = this->vm->vtsi->vtsi_mat->nr_of_vtsm_audio_streams;
++      break;
++    case DVD_DOMAIN_VMGM:
++    case DVD_DOMAIN_FirstPlay:
++      count = this->vm->vmgi->vmgi_mat->nr_of_vmgm_audio_streams;
++      break;
++    default:
++      printerr("Invalid domain provided");
++      count = -1;
++      break;
++    }
++    pthread_mutex_unlock(&this->vm_lock);
++    return count;
++  }
++
+   if (this->vm->state.domain != DVD_DOMAIN_VTSTitle &&
+       this->vm->state.domain != DVD_DOMAIN_VTSMenu)
+diff --git a/src/dvdnav/dvdnav.h b/src/dvdnav/dvdnav.h
+--- a/src/dvdnav/dvdnav.h
++++ b/src/dvdnav/dvdnav.h
+@@ -728,4 +728,6 @@
+ /*
+  * Returns the number of streams provided its type (e.g. subtitles, audio, etc)
++ * Audio counts use the enabled PGC streams in a title and the IFO stream
++ * count in a menu domain, where a missing PGC control can still route audio.
+  */
+ DVDNAV_API int8_t dvdnav_get_number_of_streams(dvdnav_t *self, dvdnav_stream_type_t stream_type);

@@ -96,7 +96,7 @@ build_prefix() {
 }
 
 export WGET="wget --progress=bar:force"
-: "${MPV_GIT_URL:=https://github.com/ijuniorfu/fm-mpv.git}"
+: "${MPV_GIT_URL:=https://github.com/FongMi/mpv.git}"
 : "${MPV_GIT_REF:=fongmi}"
 
 if [[ "$1" == export || "$1" == install ]]; then
@@ -113,6 +113,7 @@ if [[ "$1" == export || "$1" == install ]]; then
 	export LIBPLACEBO_GIT_COMMIT
 	native_source_id=$(printf '%s\n' \
 		"ffmpeg=$FFMPEG_GIT_COMMIT" \
+		"uavs3d=$v_ci_uavs3d" \
 		"dav1d=$DAV1D_GIT_COMMIT" \
 		"libass=$LIBASS_GIT_COMMIT" \
 		"libplacebo=$LIBPLACEBO_GIT_COMMIT" | sha256sum)
@@ -121,12 +122,34 @@ if [[ "$1" == export || "$1" == install ]]; then
 		echo "Failed to compute native source cache identifier." >&2
 		exit 1
 	fi
-	ci_cache_identifier="${ci_tarball%.tgz}-sources-${native_source_id}-abi-${ci_arch_tag}.tgz"
+	prefix_recipe_manifest=$(
+		for recipe in buildall.sh include/*.sh patches/*.patch scripts/*.sh; do
+			case "$recipe" in
+				include/ci.sh|scripts/mpv.sh|scripts/mpv-android.sh) continue ;;
+			esac
+			sha256sum "$recipe" || exit 1
+		done
+	)
+	prefix_recipe_id=$(printf '%s\n' "$prefix_recipe_manifest" | sha256sum)
+	prefix_recipe_id=${prefix_recipe_id%%[[:space:]]*}
+	if [[ ! "$prefix_recipe_id" =~ ^[0-9a-f]{64}$ ]]; then
+		echo "Failed to compute dependency recipe cache identifier." >&2
+		exit 1
+	fi
+	ci_cache_identifier=$(printf '%s\n' "$ci_tarball" "$native_source_id" \
+		"$prefix_recipe_id" "$ci_arch_tag" | sha256sum)
+	ci_cache_identifier=${ci_cache_identifier%%[[:space:]]*}
+	if [[ ! "$ci_cache_identifier" =~ ^[0-9a-f]{64}$ ]]; then
+		echo "Failed to compute dependency cache identifier." >&2
+		exit 1
+	fi
+	ci_cache_identifier="prefix-${ci_cache_identifier}-abi-${ci_arch_tag}.tgz"
 fi
 
 if [ "$1" = "export" ]; then
 	# Export the exact native source revisions used by the cache and build steps.
 	echo "FFMPEG_GIT_COMMIT=$FFMPEG_GIT_COMMIT"
+	echo "UAVS3D_GIT_COMMIT=$v_ci_uavs3d"
 	echo "DAV1D_GIT_COMMIT=$DAV1D_GIT_COMMIT"
 	echo "LIBASS_GIT_COMMIT=$LIBASS_GIT_COMMIT"
 	echo "LIBPLACEBO_GIT_COMMIT=$LIBPLACEBO_GIT_COMMIT"
@@ -165,8 +188,7 @@ fi
 for arch in "${ci_build_arches[@]}"; do
 	msg "Building mpv for $arch"
 	./buildall.sh --arch "$arch" -n mpv || {
-		build_dir="deps/mpv/_build"
-		[ "$arch" != armv7l ] && build_dir="${build_dir}-$arch"
+		build_dir="deps/mpv/_build_$arch"
 		[ ! -f "$build_dir/config.h" ] && \
 			[ -f "$build_dir/meson-logs/meson-log.txt" ] && \
 			cat "$build_dir/meson-logs/meson-log.txt"

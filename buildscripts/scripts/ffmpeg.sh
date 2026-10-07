@@ -28,7 +28,7 @@ cpu=armv7-a
 cpuflags=
 [[ "$ndk_triple" == "arm"* ]] && cpuflags="$cpuflags -mfpu=neon -mcpu=cortex-a8"
 
-audio_filters=(acompressor alimiter equalizer pan silenceremove stereotools volume)
+audio_filters=(acompressor alimiter dynaudnorm equalizer pan silenceremove stereotools volume)
 audio_filter_args=()
 for filter in "${audio_filters[@]}"; do
 	audio_filter_args+=(--enable-filter="$filter")
@@ -40,6 +40,11 @@ if ! grep -q -- "--enable-libarcdav3a" ../configure; then
 fi
 
 av3a_source="../dependency/avs3a"
+if ! grep -q -- "--enable-libuavs3d" ../configure; then
+	echo "FFmpeg source does not contain libuavs3d support." >&2
+	exit 1
+fi
+
 av3a_build="../_build_arcdav3a$ndk_suffix"
 if [ ! -f "$av3a_source/CMakeLists.txt" ]; then
 	echo "FFmpeg source does not contain dependency/avs3a. Update the pinned FFmpeg branch." >&2
@@ -56,7 +61,7 @@ args=(
 	--arch=${ndk_triple%%-*} --cpu=$cpu
 	--extra-cflags="-I$prefix_dir/include $cpuflags" --extra-ldflags="-L$prefix_dir/lib"
 
-	--enable-{jni,mediacodec,mbedtls,libdav1d,libxml2,libmysofa,libaribcaption,libarcdav3a} --disable-vulkan
+	--enable-{jni,mediacodec,mbedtls,libdav1d,libxml2,libmysofa,libaribcaption,libarcdav3a,libuavs3d} --disable-vulkan
 	--disable-static --enable-shared --enable-{gpl,version3}
 
 	# disable unneeded parts

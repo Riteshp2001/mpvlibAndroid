@@ -1,0 +1,12 @@
+diff --git a/src/vm/vm.c b/src/vm/vm.c
+--- a/src/vm/vm.c
++++ b/src/vm/vm.c
+@@ -527,6 +527,7 @@
+ fail:
++  /* A copy owns only its VTSI; the DVD reader and VMGI are borrowed. */
+   if (target != NULL)
+-    vm_free_vm(target);
++    vm_free_copy(target);
+
+   return NULL;
+ }

@@ -1,0 +1,11 @@
+diff --git a/src/navigation.c b/src/navigation.c
+index c8900f4..1355ab3 100644
+--- a/src/navigation.c
++++ b/src/navigation.c
+@@ -297,2 +297,6 @@ dvdnav_status_t dvdnav_go_up(dvdnav_t *this) {
+   retval = vm_jump_up(this->vm);
++  if (retval) {
++    this->position_current.still = 0;
++    this->vm->hop_channel++;
++  }
+   pthread_mutex_unlock(&this->vm_lock);

@@ -1,0 +1,180 @@
+--- a/src/libbluray/bluray.h
++++ b/src/libbluray/bluray.h
+@@ -1282,6 +1282,24 @@
+  */
+ BD_PUBLIC struct bd_file_s *bd_open_file_dec(BLURAY *bd, const char *path);
+ 
++
++/** Original file behind a recorded main-path read. The BLURAY object must outlive it. */
++typedef struct bd_read_source BD_READ_SOURCE;
++
++/** Called under the disc lock with each chunk's original file byte offset. */
++typedef void (*bd_read_origin_proc_f)(void *handle, BD_READ_SOURCE *source,
++                                     uint64_t position, const uint8_t *original,
++                                     const uint8_t *filtered, uint32_t size);
++
++/** Register before selecting a title. Returns zero if a main-path file is already open. */
++BD_PUBLIC int bd_register_read_origin_proc(BLURAY *bd, void *handle, bd_read_origin_proc_f proc);
++BD_PUBLIC void bd_retain_read_source(BD_READ_SOURCE *source);
++BD_PUBLIC void bd_release_read_source(BD_READ_SOURCE *source);
++
++/** Read original bytes without changing navigation or leaving the file cursor moved. */
++BD_PUBLIC int64_t bd_read_source(BLURAY *bd, BD_READ_SOURCE *source, uint64_t position,
++                                 uint8_t *buffer, uint32_t size);
++
+ #ifdef __cplusplus
+ }
+ #endif
+--- a/src/libbluray/bluray.c
++++ b/src/libbluray/bluray.c
+@@ -65,10 +65,18 @@
+     title_bdj,
+ } BD_TITLE_TYPE;
+ 
++struct bd_read_source {
++    BLURAY    *owner;
++    BD_FILE_H *file;
++    BD_MUTEX   mutex;
++    unsigned   references;
++};
++
+ typedef struct {
+     /* current clip */
+     const NAV_CLIP *clip;
+     BD_FILE_H      *fp;
++    BD_READ_SOURCE *read_source;
+     uint64_t       clip_size;
+     uint64_t       clip_block_pos;
+     uint64_t       clip_pos;
+@@ -120,6 +128,9 @@
+ 
+     /* buffer for bd_read(): current aligned unit of main stream (st0) */
+     uint8_t        int_buf[6144];
++    uint8_t        original_buf[6144];
++    void          *read_origin_handle;
++    bd_read_origin_proc_f read_origin_proc;
+ 
+     /* seamless angle change request */
+     int            seamless_angle_change;
+@@ -638,7 +649,11 @@
+ 
+ static void _close_m2ts(BD_STREAM *st)
+ {
+-    if (st->fp != NULL) {
++    if (st->read_source) {
++        bd_release_read_source(st->read_source);
++        st->read_source = NULL;
++        st->fp = NULL;
++    } else if (st->fp != NULL) {
+         file_close(st->fp);
+         st->fp = NULL;
+     }
+@@ -655,6 +670,22 @@
+     }
+ 
+     st->fp = disc_open_stream(bd->disc, st->clip->name);
++    if (st->fp && st == &bd->st0 && bd->read_origin_proc) {
++        st->read_source = calloc(1, sizeof(*st->read_source));
++        if (!st->read_source) {
++            _close_m2ts(st);
++            return 0;
++        }
++        st->read_source->owner = bd;
++        st->read_source->file = st->fp;
++        st->read_source->references = 1;
++        if (bd_mutex_init(&st->read_source->mutex) < 0) {
++            free(st->read_source);
++            st->read_source = NULL;
++            _close_m2ts(st);
++            return 0;
++        }
++    }
+ 
+     st->clip_size = 0;
+     st->clip_pos = (uint64_t)st->clip->start_pkt * 192;
+@@ -780,6 +811,10 @@
+                     return _skip_unit(bd, st);
+                 }
+                 st->clip_block_pos += len;
++
++                if (st == &bd->st0 && bd->read_origin_proc) {
++                    memcpy(bd->original_buf, buf, len);
++                }
+ 
+                 if ((error = _validate_unit(bd, st, buf)) <= 0) {
+                     /* skip broken unit */
+@@ -2174,6 +2209,13 @@
+             if (new_clip_pkt > st->clip->end_pkt) {
+                 BD_DEBUG(DBG_STREAM, "cut %d bytes at end of block\n", (new_clip_pkt - st->clip->end_pkt) * 192);
+                 size -= (new_clip_pkt - st->clip->end_pkt) * 192;
++            }
++
++            /* Record both sides of filtering while this exact source file is still owned. */
++            if (bd->read_origin_proc) {
++                bd->read_origin_proc(bd->read_origin_handle, st->read_source, st->clip_pos,
++                                     bd->original_buf + st->int_buf_off,
++                                     bd->int_buf + st->int_buf_off, size);
+             }
+ 
+             /* copy chunk */
+@@ -4098,6 +4140,60 @@
+     return result;
+ }
+ 
++int bd_register_read_origin_proc(BLURAY *bd, void *handle, bd_read_origin_proc_f proc)
++{
++    int result = 0;
++    bd_mutex_lock(&bd->mutex);
++    if (!bd->st0.fp) {
++        bd->read_origin_handle = handle;
++        bd->read_origin_proc = proc;
++        result = 1;
++    }
++    bd_mutex_unlock(&bd->mutex);
++    return result;
++}
++
++void bd_retain_read_source(BD_READ_SOURCE *source)
++{
++    bd_mutex_lock(&source->mutex);
++    source->references++;
++    bd_mutex_unlock(&source->mutex);
++}
++
++void bd_release_read_source(BD_READ_SOURCE *source)
++{
++    unsigned references;
++    bd_mutex_lock(&source->mutex);
++    references = --source->references;
++    bd_mutex_unlock(&source->mutex);
++    if (!references) {
++        file_close(source->file);
++        bd_mutex_destroy(&source->mutex);
++        free(source);
++    }
++}
++
++int64_t bd_read_source(BLURAY *bd, BD_READ_SOURCE *source, uint64_t position,
++                       uint8_t *buffer, uint32_t size)
++{
++    int64_t result = -1;
++    if (source->owner != bd || position > INT64_MAX) {
++        return -1;
++    }
++    bd_mutex_lock(&bd->mutex);
++    int64_t saved_position = file_tell(source->file);
++    if (saved_position >= 0) {
++        if (file_seek(source->file, (int64_t)position, SEEK_SET) == (int64_t)position) {
++            result = source->file->read(source->file, buffer, size);
++        }
++        if (file_seek(source->file, saved_position, SEEK_SET) != saved_position) {
++            result = -1;
++        }
++    }
++    bd_mutex_unlock(&bd->mutex);
++    return result;
++}
++
+ void bd_register_overlay_proc(BLURAY *bd, void *handle, bd_overlay_proc_f func)
+ {
+     if (!bd) {

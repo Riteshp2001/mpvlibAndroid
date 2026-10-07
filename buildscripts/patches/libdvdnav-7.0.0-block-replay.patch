@@ -1,0 +1,92 @@
+--- a/src/dvdnav.c
++++ b/src/dvdnav.c
+@@ -1351,6 +1351,56 @@
+ 
+   pthread_mutex_unlock(&this->vm_lock);
+   return DVDNAV_STATUS_OK;
++}
++
++dvdnav_status_t dvdnav_get_current_block_position(
++    dvdnav_t *this, dvdnav_block_position_t *position) {
++  dvdnav_block_position_t result;
++  int64_t sector;
++  if (!this || !position)
++    return DVDNAV_STATUS_ERR;
++  pthread_mutex_lock(&this->vm_lock);
++  sector = (int64_t)this->vobu.vobu_start + this->vobu.blockN;
++  if (!this->file || sector < 0 || sector > INT32_MAX)
++    goto fail;
++  result.title_set = this->position_current.vts;
++  switch (this->position_current.domain) {
++    case DVD_DOMAIN_FirstPlay:
++    case DVD_DOMAIN_VMGM:
++      result.title_set = 0;
++      result.domain = DVD_READ_MENU_VOBS;
++      break;
++    case DVD_DOMAIN_VTSMenu:
++      result.domain = DVD_READ_MENU_VOBS;
++      break;
++    case DVD_DOMAIN_VTSTitle:
++      result.domain = DVD_READ_TITLE_VOBS;
++      break;
++    default:
++      goto fail;
++  }
++  result.sector = (uint32_t)sector;
++  *position = result;
++  pthread_mutex_unlock(&this->vm_lock);
++  return DVDNAV_STATUS_OK;
++fail:
++  pthread_mutex_unlock(&this->vm_lock);
++  return DVDNAV_STATUS_ERR;
++}
++
++dvd_file_t *dvdnav_open_block_reader(
++    dvdnav_t *this, const dvdnav_block_position_t *position) {
++  dvd_file_t *file;
++  if (!this || !position || position->title_set < 0 || position->title_set > 99 ||
++      position->sector > INT32_MAX ||
++      (position->domain != DVD_READ_MENU_VOBS && position->domain != DVD_READ_TITLE_VOBS) ||
++      (position->domain == DVD_READ_TITLE_VOBS && !position->title_set))
++    return NULL;
++  pthread_mutex_lock(&this->vm_lock);
++  file = this->vm && this->vm->dvd
++      ? DVDOpenFile(this->vm->dvd, position->title_set, position->domain) : NULL;
++  pthread_mutex_unlock(&this->vm_lock);
++  return file;
+ }
+ 
+ dvdnav_status_t dvdnav_get_title_string(dvdnav_t *this, const char **title_str) {
+--- a/src/dvdnav/dvdnav.h
++++ b/src/dvdnav/dvdnav.h
+@@ -388,6 +388,30 @@
+ DVDNAV_API dvdnav_status_t dvdnav_current_title_program(dvdnav_t *self, int32_t *title,
+                                           int32_t *pgcn, int32_t *pgn);
+ 
++/* Immutable location in a VOB file, independent of subsequent VM navigation. */
++typedef struct {
++  int32_t title_set;
++  dvd_read_domain_t domain;
++  uint32_t sector;
++} dvdnav_block_position_t;
++
++/*
++ * Capture immediately after a successful DVDNAV_BLOCK_OK, before another read
++ * or navigation operation. The caller serializes this capture with that read.
++ * The sector is relative to the selected menu/title VOB file, not the PGC.
++ */
++DVDNAV_API dvdnav_status_t dvdnav_get_current_block_position(
++    dvdnav_t *self, dvdnav_block_position_t *position);
++
++/*
++ * Open an independent, read-only VOB file for a captured block location without
++ * moving the VM. The caller owns the file and uses DVDReadBlocks/DVDCloseFile.
++ * The file must be closed before self; serialize reads with all other reads or
++ * navigation on self, because they share a libdvdread input callback.
++ */
++DVDNAV_API dvd_file_t *dvdnav_open_block_reader(
++    dvdnav_t *self, const dvdnav_block_position_t *position);
++
+ /*
+  * Return the current position (in blocks) within the current
+  * title and the length (in blocks) of said title.

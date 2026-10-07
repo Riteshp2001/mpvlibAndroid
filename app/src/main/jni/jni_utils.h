@@ -1,12 +1,18 @@
 #pragma once
 
 #include <jni.h>
+#include <stdint.h>
+#include <string>
 
 #define jni_func_name(name) Java_is_xyz_mpv_MPVLib_##name
 #define jni_func(return_type, name, ...) JNIEXPORT return_type JNICALL jni_func_name(name) (JNIEnv *env, jobject obj, ##__VA_ARGS__)
 
 bool acquire_jni_env(JavaVM *vm, JNIEnv **env);
-void init_methods_cache(JNIEnv *env);
+bool init_methods_cache(JNIEnv *env);
+bool jstring_to_utf8(JNIEnv *env, jstring value, std::string *utf8);
+jstring utf8_to_jstring(JNIEnv *env, const char *value);
+void send_command_reply_to_java(JNIEnv *env, uint64_t request_id, int error,
+                               int64_t result);
 
 #ifndef UTIL_EXTERN
 #define UTIL_EXTERN extern
@@ -28,6 +34,8 @@ UTIL_EXTERN jmethodID mpv_MPVLib_eventProperty_S,
 	mpv_MPVLib_eventProperty_SS,
 	mpv_MPVLib_eventProperty_SN,
 	mpv_MPVLib_event,
+	mpv_MPVLib_eventCommandReply_JiJ,
+	mpv_MPVLib_eventEndFile_iiS,
 	mpv_MPVLib_logMessage_SiS;
 
 UTIL_EXTERN jclass mpv_MPVNode_None, mpv_MPVNode_StringNode, mpv_MPVNode_BooleanNode,

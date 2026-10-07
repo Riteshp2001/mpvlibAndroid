@@ -1,0 +1,15 @@
+diff --git a/src/dvdnav.c b/src/dvdnav.c
+--- a/src/dvdnav.c
++++ b/src/dvdnav.c
+@@ -745 +745,10 @@
+-    cell_event->pgc_length = dvdnav_convert_time(&state->pgc->playback_time);
++    /* dvdnav_get_current_time() and time seeks use the cell playback times.
++     * The authored PGC summary can be shorter than their sum. */
++    cell_event->pgc_length = 0;
++    for (i = 0; i < state->pgc->nr_of_cells; i++) {
++      const cell_playback_t *cell = &state->pgc->cell_playback[i];
++      if (cell->block_type == BLOCK_TYPE_ANGLE_BLOCK &&
++          cell->block_mode != BLOCK_MODE_FIRST_CELL)
++        continue;
++      cell_event->pgc_length += dvdnav_convert_time(&cell->playback_time);
++    }

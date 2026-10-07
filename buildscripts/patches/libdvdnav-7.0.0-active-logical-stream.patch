@@ -1,0 +1,120 @@
+--- a/src/dvdnav.c
++++ b/src/dvdnav.c
+@@ -1482,6 +1482,97 @@
+   return count;
+ }
+ 
++/* Caller holds vm_lock. */
++static int8_t get_number_of_stream_attributes(dvdnav_t *this,
++                                              dvdnav_stream_type_t stream_type) {
++  int count = -1;
++  int limit = 1;
++  if (this->vm->state.pgc) {
++    switch (this->vm->state.domain) {
++    case DVD_DOMAIN_VTSTitle:
++      if (this->vm->vtsi && this->vm->vtsi->vtsi_mat) {
++        count = stream_type == DVD_AUDIO_STREAM
++              ? this->vm->vtsi->vtsi_mat->nr_of_vts_audio_streams
++              : this->vm->vtsi->vtsi_mat->nr_of_vts_subp_streams;
++        limit = stream_type == DVD_AUDIO_STREAM ? 8 : 32;
++      }
++      break;
++    case DVD_DOMAIN_VTSMenu:
++      if (this->vm->vtsi && this->vm->vtsi->vtsi_mat) {
++        count = stream_type == DVD_AUDIO_STREAM
++              ? this->vm->vtsi->vtsi_mat->nr_of_vtsm_audio_streams
++              : this->vm->vtsi->vtsi_mat->nr_of_vtsm_subp_streams;
++      }
++      break;
++    case DVD_DOMAIN_VMGM:
++    case DVD_DOMAIN_FirstPlay:
++      if (this->vm->vmgi && this->vm->vmgi->vmgi_mat) {
++        count = stream_type == DVD_AUDIO_STREAM
++              ? this->vm->vmgi->vmgi_mat->nr_of_vmgm_audio_streams
++              : this->vm->vmgi->vmgi_mat->nr_of_vmgm_subp_streams;
++      }
++      break;
++    default:
++      break;
++    }
++  }
++  if (count < 0 || count > limit) {
++    printerr("Invalid domain stream attributes");
++    return -1;
++  }
++  return (int8_t)count;
++}
++
++int8_t dvdnav_get_active_logical_stream(dvdnav_t *this,
++                                        dvdnav_stream_type_t stream_type) {
++  if (stream_type != DVD_AUDIO_STREAM && stream_type != DVD_SUBTITLE_STREAM) {
++    printerr("Invalid provided stream type");
++    return -1;
++  }
++  if (!this->started) {
++    printerr("Virtual DVD machine not started.");
++    return -1;
++  }
++  pthread_mutex_lock(&this->vm_lock);
++  int count = get_number_of_stream_attributes(this, stream_type);
++  int selected = -1;
++  if (count > 0) {
++    int subtitles = stream_type == DVD_SUBTITLE_STREAM;
++    int physical = subtitles ? vm_get_subp_active_stream(this->vm, 0)
++                             : vm_get_audio_active_stream(this->vm);
++    if (physical != -1) {
++      if (subtitles)
++        physical &= 0x7f; /* Visibility does not change the selected logical stream. */
++      int preferred = this->vm->state.domain != DVD_DOMAIN_VTSTitle ? 0
++                    : subtitles ? this->vm->state.SPST_REG & ~0x40
++                                : this->vm->state.AST_REG;
++      int limit = subtitles ? 32 : 8;
++      int has_preferred = 0;
++      if (preferred >= 0 && preferred < limit) {
++        int mapped = subtitles ? vm_get_subp_stream(this->vm, preferred, 0)
++                               : vm_get_audio_stream(this->vm, preferred);
++        if (mapped == physical) {
++          selected = preferred < count ? preferred : -1;
++          has_preferred = 1;
++        }
++      }
++      if (!has_preferred) {
++        /* The VM selects the first enabled stream when the preferred one is absent. */
++        for (int logical = 0; logical < limit; logical++) {
++          int mapped = subtitles ? vm_get_subp_stream(this->vm, logical, 0)
++                                 : vm_get_audio_stream(this->vm, logical);
++          if (mapped == physical) {
++            selected = logical < count ? logical : -1;
++            break;
++          }
++        }
++      }
++    }
++  }
++  pthread_mutex_unlock(&this->vm_lock);
++  return (int8_t)selected;
++}
++
+ dvdnav_status_t dvdnav_get_audio_attr(dvdnav_t *this, uint8_t audio_num, audio_attr_t *audio_attr) {
+   if(!this->started) {
+     printerr("Virtual DVD machine not started.");
+--- a/src/dvdnav/dvdnav.h
++++ b/src/dvdnav/dvdnav.h
+@@ -759,8 +759,16 @@
+ DVDNAV_API dvdnav_status_t dvdnav_toggle_spu_stream(dvdnav_t *self, uint8_t visibility);
+ 
+ /*
++ * Return the effective zero-based logical audio or subtitle stream, or -1 if
++ * unavailable. Unlike the physical stream APIs, logical aliases remain distinct.
++ * A hidden subtitle stream still has a logical selection.
++ */
++DVDNAV_API int8_t dvdnav_get_active_logical_stream(dvdnav_t *self,
++                                                dvdnav_stream_type_t stream_type);
++
++/*
+  * Set the given stream id and stream type as active
+- * stream_num - the physical index of the stream
++ * stream_num - the zero-based logical index of the stream
+  * stream_type - the stream type (audio or subtitles)
+  */
+ DVDNAV_API dvdnav_status_t dvdnav_set_active_stream(dvdnav_t *self, uint8_t stream_num,

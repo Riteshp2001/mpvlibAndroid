@@ -14,6 +14,7 @@ android {
         targetSdkVersion 36
         versionCode 1000009
         versionName version
+        consumerProguardFiles 'consumer-rules.pro'
         // Load information about the NDK to use
         def props = new Properties()
         def propfile = new File(rootDir, 'ndk.properties')
@@ -39,6 +40,7 @@ android {
 
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'
     implementation 'androidx.appcompat:appcompat:1.7.0'
 }
 

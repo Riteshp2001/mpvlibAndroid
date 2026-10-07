@@ -1,0 +1,12 @@
+diff --git a/src/searching.c b/src/searching.c
+--- a/src/searching.c
++++ b/src/searching.c
+@@ -758,7 +758,7 @@
+     if(ptt[i].pgn < pgc->nr_of_programs)
+       endcellnr = pgc->program_map[ptt[i].pgn];
+     else
+-      endcellnr = 0;
++      endcellnr = pgc->nr_of_cells + 1;
+ 
+     do {
+       cell = &pgc->cell_playback[cellnr-1];

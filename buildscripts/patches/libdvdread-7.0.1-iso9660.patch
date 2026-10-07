@@ -1,0 +1,740 @@
+diff --git a/src/dvd_iso9660.c b/src/dvd_iso9660.c
+--- /dev/null
++++ b/src/dvd_iso9660.c
+@@ -0,0 +1,299 @@
++/*
++ * ISO9660 primary-volume file lookup and file-section mapping (ECMA-119).
++ * This file is part of libdvdread.
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++#include "config.h"
++#include <limits.h>
++#include <stdlib.h>
++#include <string.h>
++#include "dvd_iso9660.h"
++#include "dvdread_internal.h"
++
++#define SECTOR DVD_VIDEO_LB_LEN
++#define MAX_VOLUME_DESCRIPTORS 256
++
++typedef struct {
++  uint32_t lba, size;
++  unsigned flags;
++  const unsigned char *name;
++  size_t name_length;
++} iso_record_t;
++
++static int iso_both16(const unsigned char *p, uint16_t *v)
++{
++  *v = (uint16_t)(p[0] | p[1] << 8);
++  return *v == (uint16_t)(p[2] << 8 | p[3]);
++}
++
++static int iso_both32(const unsigned char *p, uint32_t *v)
++{
++  *v = (uint32_t)p[0] | (uint32_t)p[1] << 8 |
++       (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
++  return *v == ((uint32_t)p[4] << 24 | (uint32_t)p[5] << 16 |
++                (uint32_t)p[6] << 8 | p[7]);
++}
++
++static int iso_record(const unsigned char *p, size_t available,
++                      uint32_t volume_blocks, iso_record_t *record)
++{
++  uint16_t volume;
++  uint32_t lba, size;
++  if (available < 34 || p[0] < 34 || p[0] > available ||
++      p[32] == 0 || p[32] > p[0] - 33 ||
++      !iso_both32(p + 2, &lba) || !iso_both32(p + 10, &size) ||
++      !iso_both16(p + 28, &volume) || volume != 1 || p[26] || p[27])
++    return -1;
++  /* Extended-attribute blocks precede file data. ISO file-unit interleaving
++   * (unlike DVD ILVU data inside a VOB) is not supported. */
++  if (lba > volume_blocks || p[1] > volume_blocks - lba)
++    return -1;
++  lba += p[1];
++  if ((uint64_t)size > (uint64_t)(volume_blocks - lba) * SECTOR)
++    return -1;
++  record->lba = lba;
++  record->size = size;
++  record->flags = p[25];
++  record->name = p + 33;
++  record->name_length = p[32];
++  if ((record->flags & 0x80) &&
++      ((record->flags & 2) || !size || size % SECTOR))
++    return -1;
++  return 0;
++}
++
++int DVDISO9660Detect(dvd_reader_t *ctx, dvd_iso9660_t **result)
++{
++  unsigned char sector[SECTOR], primary[SECTOR];
++  int found = 0, terminated = 0, saw_iso = 0, invalid_version = 0;
++  uint32_t volume_blocks, primary_lba = 0;
++  uint16_t block_size, volumes, volume;
++  iso_record_t root;
++  *result = NULL;
++  unsigned i;
++  for (i = 0; i < MAX_VOLUME_DESCRIPTORS; i++) {
++    int read = InternalUDFReadBlocksRaw(ctx, 16 + i, 1, sector, 0);
++    if (read != 1)
++      return -1;
++    if (!memcmp(sector + 1, "NSR02", 5) || !memcmp(sector + 1, "NSR03", 5))
++      return 0;
++    if (!memcmp(sector + 1, "BEA01", 5) || !memcmp(sector + 1, "TEA01", 5) ||
++        !memcmp(sector + 1, "BOOT2", 5) || !memcmp(sector + 1, "CDW02", 5))
++      continue;
++    if (memcmp(sector + 1, "CD001", 5))
++      break;
++    saw_iso = 1;
++    if (sector[0] == 1 || sector[0] == 255)
++      invalid_version |= sector[6] != 1;
++    if (sector[0] == 1 && !found) {
++      memcpy(primary, sector, SECTOR);
++      primary_lba = 16 + i;
++      found = 1;
++    }
++    if (sector[0] == 255)
++      terminated = 1;
++  }
++  if (i == MAX_VOLUME_DESCRIPTORS)
++    return -1;
++  if (!saw_iso)
++    return 0;
++  if (!found || !terminated || invalid_version ||
++      !iso_both32(primary + 80, &volume_blocks) || volume_blocks < 18 ||
++      volume_blocks > INT_MAX || !iso_both16(primary + 128, &block_size) ||
++      block_size != SECTOR || !iso_both16(primary + 120, &volumes) || volumes != 1 ||
++      !iso_both16(primary + 124, &volume) || volume != 1 ||
++      iso_record(primary + 156, SECTOR - 156, volume_blocks, &root) < 0 ||
++      !(root.flags & 2) || root.name_length != 1 || root.name[0] != 0)
++    return -1;
++  dvd_iso9660_t *fs = malloc(sizeof(*fs));
++  if (!fs)
++    return -1;
++  fs->volume_blocks = volume_blocks;
++  fs->primary_lba = primary_lba;
++  fs->root_lba = root.lba;
++  fs->root_size = root.size;
++  *result = fs;
++  return 1;
++}
++
++void DVDISO9660Clear(dvd_iso9660_file_t *file)
++{
++  free(file->extents);
++  memset(file, 0, sizeof(*file));
++}
++
++static int iso_append_extent(dvd_iso9660_file_t *file, uint32_t lba, uint32_t size)
++{
++  uint32_t blocks = size / SECTOR + (size % SECTOR != 0);
++  if (file->size % SECTOR || size > UINT64_MAX - file->size)
++    return -1;
++  if (file->count == file->capacity) {
++    size_t capacity = file->capacity ? file->capacity * 2 : 4;
++    if (capacity < file->capacity || capacity > SIZE_MAX / sizeof(*file->extents))
++      return -1;
++    void *extents = realloc(file->extents, capacity * sizeof(*file->extents));
++    if (!extents)
++      return -1;
++    file->extents = extents;
++    file->capacity = capacity;
++  }
++  file->extents[file->count++] = (dvd_iso9660_extent_t){lba, blocks};
++  file->size += size;
++  return 0;
++}
++
++int DVDISO9660Append(dvd_iso9660_file_t *file, const dvd_iso9660_file_t *part)
++{
++  if (file->size % SECTOR || part->size > UINT64_MAX - file->size ||
++      part->count > SIZE_MAX / sizeof(*file->extents) - file->count)
++    return -1;
++  size_t count = file->count + part->count;
++  if (count > file->capacity) {
++    void *extents = realloc(file->extents, count * sizeof(*file->extents));
++    if (!extents)
++      return -1;
++    file->extents = extents;
++    file->capacity = count;
++  }
++  if (part->count)
++    memcpy(file->extents + file->count, part->extents,
++           part->count * sizeof(*file->extents));
++  file->count = count;
++  file->size += part->size;
++  return 0;
++}
++
++static unsigned iso_upper(unsigned c)
++{
++  return c >= 'a' && c <= 'z' ? c - 'a' + 'A' : c;
++}
++
++static int iso_name_matches(const iso_record_t *record, const char *name, size_t length)
++{
++  size_t n = record->name_length;
++  /* DVD callers omit the ISO file version. Do not prefix-match names. */
++  for (size_t i = 0; i < n; i++) {
++    if (record->name[i] == ';') {
++      if (i + 1 == n)
++        return 0;
++      for (size_t j = i + 1; j < n; j++)
++        if (record->name[j] < '0' || record->name[j] > '9')
++          return 0;
++      n = i;
++      break;
++    }
++  }
++  if (n != length)
++    return 0;
++  for (size_t i = 0; i < n; i++)
++    if (iso_upper(record->name[i]) != iso_upper((unsigned char)name[i]))
++      return 0;
++  return 1;
++}
++
++static int iso_scan_directory(dvd_reader_t *ctx, const dvd_iso9660_t *fs,
++                              uint32_t lba, uint32_t size, const char *name,
++                              size_t length, int directory, iso_record_t *selected,
++                              dvd_iso9660_file_t *file)
++{
++  unsigned char sector[SECTOR], previous_name[255];
++  size_t previous_length = 0;
++  int continuation = 0, found = 0;
++  unsigned previous_flags = 0;
++  for (uint64_t offset = 0; offset < size; offset += SECTOR) {
++    size_t limit = size - offset < SECTOR ? (size_t)(size - offset) : SECTOR;
++    if (InternalUDFReadBlocksRaw(ctx, lba + (uint32_t)(offset / SECTOR),
++                                 1, sector, 0) != 1)
++      return -1;
++    for (size_t pos = 0; pos < limit;) {
++      iso_record_t entry;
++      if (!sector[pos])
++        break; /* Directory padding extends to the next logical sector. */
++      if (iso_record(sector + pos, limit - pos, fs->volume_blocks, &entry) < 0)
++        return -1;
++      pos += sector[pos];
++      if (continuation &&
++          (entry.name_length != previous_length ||
++           memcmp(entry.name, previous_name, previous_length) ||
++           (entry.flags & ~0x80u) != previous_flags))
++        return -1;
++      int matches = !(entry.flags & 4) && iso_name_matches(&entry, name, length);
++      if (matches) {
++        if (!!(entry.flags & 2) != directory || (found && !continuation))
++          return -1;
++        if (!found)
++          *selected = entry;
++        if (iso_append_extent(file, entry.lba, entry.size) < 0)
++          return -1;
++        found = 1;
++      }
++      continuation = (entry.flags & 0x80) != 0;
++      if (continuation) {
++        previous_length = entry.name_length;
++        memcpy(previous_name, entry.name, previous_length);
++        previous_flags = entry.flags & ~0x80u;
++      }
++    }
++  }
++  return continuation ? -1 : found;
++}
++
++int DVDISO9660FindFile(dvd_reader_t *ctx, const dvd_iso9660_t *fs,
++                     const char *path, dvd_iso9660_file_t *file)
++{
++  uint32_t lba = fs->root_lba, size = fs->root_size;
++  memset(file, 0, sizeof(*file));
++  if (*path != '/')
++    return -1;
++  path++;
++  while (*path) {
++    iso_record_t entry;
++    const char *end = strchr(path, '/');
++    size_t length = end ? (size_t)(end - path) : strlen(path);
++    if (!length || length > 255 || (end && !end[1]))
++      return -1;
++    int result = iso_scan_directory(ctx, fs, lba, size, path, length, end != NULL,
++                                    &entry, file);
++    if (result != 1) {
++      DVDISO9660Clear(file);
++      return result;
++    }
++    if (!end)
++      return 1;
++    lba = entry.lba;
++    size = entry.size;
++    DVDISO9660Clear(file);
++    path = end + 1;
++  }
++  return -1;
++}
++
++int DVDISO9660ReadBlocks(dvd_reader_t *ctx, const dvd_iso9660_file_t *file,
++                        uint32_t offset, size_t count, unsigned char *data, int flags)
++{
++  uint64_t blocks = file->size / SECTOR + (file->size % SECTOR != 0);
++  size_t done = 0;
++  if (offset > blocks || count > blocks - offset || count > INT_MAX ||
++      count > SIZE_MAX / SECTOR)
++    return -1;
++  for (size_t i = 0; count && i < file->count; i++) {
++    const dvd_iso9660_extent_t *extent = &file->extents[i];
++    if (offset >= extent->blocks) {
++      offset -= extent->blocks;
++      continue;
++    }
++    size_t n = extent->blocks - offset;
++    if (n > count)
++      n = count;
++    int read = InternalUDFReadBlocksRaw(ctx, extent->lba + offset, n,
++                                        data + done * SECTOR, flags);
++    if (read < 0 || (size_t)read > n)
++      return -1;
++    done += (size_t)read;
++    if ((size_t)read < n)
++      return (int)done;
++    count -= n;
++    offset = 0;
++  }
++  return count ? -1 : (int)done;
++}
+diff --git a/src/dvd_iso9660.h b/src/dvd_iso9660.h
+--- /dev/null
++++ b/src/dvd_iso9660.h
+@@ -0,0 +1,41 @@
++/*
++ * This file is part of libdvdread.
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++#ifndef LIBDVDREAD_DVD_ISO9660_H
++#define LIBDVDREAD_DVD_ISO9660_H
++
++#include <stddef.h>
++#include <stdint.h>
++#include "dvdread/dvd_reader.h"
++
++typedef struct {
++  uint32_t lba;
++  uint32_t blocks;
++} dvd_iso9660_extent_t;
++
++typedef struct {
++  dvd_iso9660_extent_t *extents;
++  size_t count, capacity;
++  uint64_t size;
++} dvd_iso9660_file_t;
++
++typedef struct {
++  uint32_t volume_blocks, primary_lba;
++  uint32_t root_lba, root_size;
++} dvd_iso9660_t;
++
++/* 1: ISO9660, 0: UDF or no ISO9660, -1: malformed/unsupported image or I/O error.
++ * UDF recognition always takes precedence over the ISO9660 primary namespace. */
++int DVDISO9660Detect(dvd_reader_t *, dvd_iso9660_t **);
++
++/* 1: found, 0: absent, -1: malformed/unsupported file or I/O error.
++ * The caller owns the returned extent array, including after appending files. */
++int DVDISO9660FindFile(dvd_reader_t *, const dvd_iso9660_t *, const char *,
++                     dvd_iso9660_file_t *);
++int DVDISO9660Append(dvd_iso9660_file_t *, const dvd_iso9660_file_t *);
++void DVDISO9660Clear(dvd_iso9660_file_t *);
++int DVDISO9660ReadBlocks(dvd_reader_t *, const dvd_iso9660_file_t *, uint32_t,
++                        size_t, unsigned char *, int);
++
++#endif
+diff --git a/src/dvd_reader.c b/src/dvd_reader.c
+--- a/src/dvd_reader.c
++++ b/src/dvd_reader.c
+@@ -54,6 +54,7 @@
+ #include "dvdread/dvd_udf.h"
+ #include "dvdread/dvd_reader.h"
+ #include "dvd_input.h"
++#include "dvd_iso9660.h"
+ #include "dvdread_internal.h"
+ #include "md5.h"
+ #include "dvdread/ifo_read.h"
+@@ -211,6 +212,10 @@
+   /* Filesystem cache */
+   int udfcache_level; /* 0 - turned off, 1 - on */
+   void *udfcache;
++
++  /* Image filesystem: 0 unknown, 1 UDF, 2 ISO9660, -1 invalid. */
++  int image_filesystem;
++  dvd_iso9660_t *iso9660;
+ };
+ 
+ #define TITLES_MAX 9
+@@ -224,6 +229,7 @@
+ 
+   /* Information required for an image file. */
+   uint32_t lb_start;
++  dvd_iso9660_file_t iso_file;
+   uint32_t seek_pos;
+ 
+   /* Information required for a directory path drive. */
+@@ -274,6 +280,8 @@
+ 
+ 
+ 
++static uint32_t DVDImageFindFile( dvd_reader_t *, const char *, uint32_t * );
++
+ /* Loop over all titles and call dvdcss_title to crack the keys. */
+ static int initAllCSSKeys( dvd_reader_t *ctx )
+ {
+@@ -299,7 +307,7 @@
+     } else {
+       sprintf( filename, "/VIDEO_TS/VTS_%02d_%d.VOB", title, 0 );
+     }
+-    start = UDFFindFile( ctx, filename, &len );
++    start = DVDImageFindFile( ctx, filename, &len );
+     if( start != 0 && len != 0 ) {
+       /* Perform CSS key cracking for this title. */
+       Log3(ctx,"Get key for %s at 0x%08x",filename, start );
+@@ -314,7 +322,7 @@
+ 
+     gettimeofday( &t_s, NULL );
+     sprintf( filename, "/VIDEO_TS/VTS_%02d_%d.VOB", title, 1 );
+-    start = UDFFindFile( ctx, filename, &len );
++    start = DVDImageFindFile( ctx, filename, &len );
+     if( start == 0 || len == 0 ) break;
+ 
+     /* Perform CSS key cracking for this title. */
+@@ -803,6 +811,7 @@
+     if( dvd->rd->dev ) dvdinput_close( dvd->rd->dev );
+     if( dvd->rd->path_root ) free( dvd->rd->path_root );
+     if( dvd->rd->udfcache ) FreeUDFCache( dvd->rd->udfcache );
++    free( dvd->rd->iso9660 );
+     free( dvd->rd );
+     free( dvd );
+   }
+@@ -811,13 +820,155 @@
+ /**
+  * Open an unencrypted file on a DVD image file.
+  */
++/* Select by volume recognition, never by a failed UDF file lookup. */
++static int DVDImageFileSystem( dvd_reader_t *ctx )
++{
++  if( !ctx->rd->image_filesystem ) {
++    int result = DVDISO9660Detect( ctx, &ctx->rd->iso9660 );
++    ctx->rd->image_filesystem = result < 0 ? -1 : result ? 2 : 1;
++  }
++  return ctx->rd->image_filesystem;
++}
++
++/* Existing callers need the initial physical LBA for CSS key selection, or
++ * the size of DVD files (each IFO/BUP/VOB part fits in uint32_t). File data
++ * itself must always be read through the complete extent map. */
++static uint32_t DVDImageFindFile( dvd_reader_t *ctx, const char *filename, uint32_t *size )
++{
++  *size = 0;
++  int filesystem = DVDImageFileSystem( ctx );
++  if( filesystem < 0 ) return 0;
++  if( filesystem == 1 ) return UDFFindFile( ctx, filename, size );
++  dvd_iso9660_file_t file;
++  int found = DVDISO9660FindFile( ctx, ctx->rd->iso9660, filename, &file );
++  uint32_t start = 0;
++  if( found == 1 && file.count && file.size <= UINT32_MAX ) {
++    start = file.extents[0].lba;
++    *size = (uint32_t)file.size;
++  }
++  DVDISO9660Clear( &file );
++  return start;
++}
++
++static dvd_file_t *DVDOpenFileISO( dvd_reader_t *ctx, const char *filename,
++                                  int do_cache )
++{
++  dvd_file_t *file = calloc( 1, sizeof(*file) );
++  if( !file ) return NULL;
++  if( DVDISO9660FindFile( ctx, ctx->rd->iso9660, filename, &file->iso_file ) != 1 ||
++      file->iso_file.size % DVD_VIDEO_LB_LEN ||
++      file->iso_file.size / DVD_VIDEO_LB_LEN > INT_MAX ) {
++    DVDISO9660Clear( &file->iso_file );
++    free( file );
++    return NULL;
++  }
++  file->ctx = ctx;
++  file->lb_start = file->iso_file.count ? file->iso_file.extents[0].lba : 0;
++  file->filesize = (ssize_t)(file->iso_file.size / DVD_VIDEO_LB_LEN);
++  if( do_cache && file->filesize > 0 && file->filesize < 64 ) {
++    file->cache = malloc( (size_t)file->iso_file.size );
++    if( file->cache && DVDISO9660ReadBlocks( ctx, &file->iso_file, 0,
++        (size_t)file->filesize, file->cache, DVDINPUT_NOFLAGS ) != file->filesize ) {
++      /* A source read failure is not an instruction to retry uncached. */
++      free( file->cache );
++      DVDISO9660Clear( &file->iso_file );
++      free( file );
++      return NULL;
++    }
++  }
++  return file;
++}
++
++static dvd_file_t *DVDOpenVOBISO( dvd_reader_t *ctx, int title, int menu )
++{
++  char filename[MAX_UDF_FILE_NAME_LEN];
++  dvd_file_t *file = NULL;
++  for( int part = menu ? 0 : 1; part <= (menu ? 0 : 9); part++ ) {
++    if( title == 0 )
++      sprintf( filename, "/%s_TS/%s_TS.VOB", DVD_TYPE_STRING(ctx->dvd_type),
++               DVD_TYPE_STRING(ctx->dvd_type) );
++    else
++      sprintf( filename, "/%s_TS/%cTS_%02d_%d.%cOB", DVD_TYPE_STRING(ctx->dvd_type),
++               STREAM_TYPE_STRING(ctx->dvd_type), title, part,
++               STREAM_TYPE_STRING(ctx->dvd_type) );
++    dvd_iso9660_file_t section;
++    int found = DVDISO9660FindFile( ctx, ctx->rd->iso9660, filename, &section );
++    if( found < 0 || (found && (section.size % DVD_VIDEO_LB_LEN ||
++        section.size / DVD_VIDEO_LB_LEN > INT_MAX)) ) {
++      DVDISO9660Clear( &section );
++      goto fail;
++    }
++    if( !found ) break;
++    if( !file ) {
++      file = calloc( 1, sizeof(*file) );
++      if( !file ) {
++        DVDISO9660Clear( &section );
++        return NULL;
++      }
++      file->ctx = ctx;
++      if( ctx->dvd_type == DVD_V ) file->css_title = title << 1 | menu;
++    }
++    int appended = DVDISO9660Append( &file->iso_file, &section );
++    DVDISO9660Clear( &section );
++    if( appended < 0 || file->iso_file.size / DVD_VIDEO_LB_LEN > INT_MAX )
++      goto fail;
++    if( title == 0 ) break;
++  }
++  if( file ) {
++    file->filesize = (ssize_t)(file->iso_file.size / DVD_VIDEO_LB_LEN);
++    file->lb_start = file->iso_file.count ? file->iso_file.extents[0].lba : 0;
++    if( ctx->dvd_type == DVD_V && ctx->rd->css_state == 1 ) {
++      initAllCSSKeys( ctx );
++      ctx->rd->css_state = 2;
++    }
++  }
++  return file;
++fail:
++  if( file ) {
++    DVDISO9660Clear( &file->iso_file );
++    free( file );
++  }
++  return NULL;
++}
++
++static int DVDFileStatISO( dvd_reader_t *ctx, int title, int menu, dvd_stat_t *statbuf )
++{
++  char filename[MAX_UDF_FILE_NAME_LEN];
++  memset( statbuf, 0, sizeof(*statbuf) );
++  for( int part = menu ? 0 : 1; part <= (menu ? 0 : 9); part++ ) {
++    if( title == 0 )
++      sprintf( filename, "/%s_TS/%s_TS.VOB", DVD_TYPE_STRING(ctx->dvd_type),
++               DVD_TYPE_STRING(ctx->dvd_type) );
++    else
++      sprintf( filename, "/%s_TS/%cTS_%02d_%d.%cOB", DVD_TYPE_STRING(ctx->dvd_type),
++               STREAM_TYPE_STRING(ctx->dvd_type), title, part,
++               STREAM_TYPE_STRING(ctx->dvd_type) );
++    dvd_iso9660_file_t section;
++    int found = DVDISO9660FindFile( ctx, ctx->rd->iso9660, filename, &section );
++    if( found != 1 ) return found < 0 || !statbuf->nr_parts ? -1 : 0;
++    uint64_t size = section.size;
++    DVDISO9660Clear( &section );
++    /* dvd_stat_t uses off_t, which can be 32 bits on some hosts. */
++    off_t total = (off_t)((uint64_t)statbuf->size + size);
++    if( total < 0 || (uint64_t)total != (uint64_t)statbuf->size + size ) return -1;
++    statbuf->parts_size[statbuf->nr_parts++] = (off_t)size;
++    statbuf->size = total;
++    if( title == 0 ) break;
++  }
++  return 0;
++}
++
+ static dvd_file_t *DVDOpenFileUDF( dvd_reader_t *ctx, const char *filename,
+                                    int do_cache )
+ {
+   uint32_t start, len;
+   dvd_file_t *dvd_file;
+ 
+-  start = UDFFindFile( ctx, filename, &len );
++  int filesystem = DVDImageFileSystem( ctx );
++  if( filesystem < 0 ) return NULL;
++  if( filesystem == 2 ) return DVDOpenFileISO( ctx, filename, do_cache );
++
++  start = DVDImageFindFile( ctx, filename, &len );
+   if( !start ) {
+     Log0( ctx, "DVDOpenFileUDF:UDFFindFile %s failed", filename );
+     return NULL;
+@@ -977,7 +1128,7 @@
+   /* exits early if there is no MKB file */
+   if( dvd->isImageFile ) 
+   {
+-    if( !UDFFindFile( ctx, filename, &len ) ) return NULL;
++    if( !DVDImageFindFile( ctx, filename, &len ) ) return NULL;
+     mkb_file= DVDOpenFileUDF( ctx, filename, 0 );
+   } else
+   {
+@@ -1012,13 +1163,17 @@
+   uint32_t start, len;
+   dvd_file_t *dvd_file;
+ 
++  int filesystem = DVDImageFileSystem( ctx );
++  if( filesystem < 0 ) return NULL;
++  if( filesystem == 2 ) return DVDOpenVOBISO( ctx, title, menu );
++
+   if( title == 0 ) {
+     sprintf( filename, "/%s_TS/%s_TS.VOB", DVD_TYPE_STRING( ctx->dvd_type ), DVD_TYPE_STRING( ctx->dvd_type ) );
+   } else {
+     sprintf( filename, "/%s_TS/%cTS_%02d_%d.%cOB", DVD_TYPE_STRING( ctx->dvd_type ), STREAM_TYPE_STRING( ctx->dvd_type ),
+             title, menu ? 0 : 1, STREAM_TYPE_STRING( ctx->dvd_type ) );
+   }
+-  start = UDFFindFile( ctx, filename, &len );
++  start = DVDImageFindFile( ctx, filename, &len );
+   if( start == 0 ) return NULL;
+ 
+   dvd_file = calloc( 1, sizeof( dvd_file_t ) );
+@@ -1039,7 +1194,7 @@
+     for( cur = 2; cur < 10; cur++ ) {
+       sprintf( filename, "/%s_TS/%cTS_%02d_%d.%cOB", DVD_TYPE_STRING( ctx->dvd_type ), 
+               STREAM_TYPE_STRING( ctx->dvd_type ), title, menu ? 0 : 1, STREAM_TYPE_STRING( ctx->dvd_type ) );
+-      if( !UDFFindFile( ctx, filename, &len ) ) break;
++      if( !DVDImageFindFile( ctx, filename, &len ) ) break;
+       dvd_file->filesize += len / DVD_VIDEO_LB_LEN;
+     }
+   }
+@@ -1218,6 +1373,7 @@
+     }
+ 
+     free( dvd_file->cache );
++    DVDISO9660Clear( &dvd_file->iso_file );
+     free( dvd_file );
+     dvd_file = NULL;
+   }
+@@ -1233,6 +1389,10 @@
+   int nr_parts = 0;
+   int n;
+ 
++  int filesystem = DVDImageFileSystem( dvd );
++  if( filesystem < 0 ) return -1;
++  if( filesystem == 2 ) return DVDFileStatISO( dvd, title, menu, statbuf );
++
+   if( title == 0 )
+     sprintf( filename, "/%s_TS/%s_TS.VOB", DVD_TYPE_STRING( dvd->dvd_type ),
+             DVD_TYPE_STRING( dvd->dvd_type ) );
+@@ -1240,7 +1400,7 @@
+     sprintf( filename, "/%s_TS/%cTS_%02d_%d.%cOB", DVD_TYPE_STRING( dvd->dvd_type ), 
+             STREAM_TYPE_STRING( dvd->dvd_type ), title, menu ? 0 : 1, STREAM_TYPE_STRING( dvd->dvd_type ) );
+ 
+-  if( !UDFFindFile( dvd, filename, &size ) )
++  if( !DVDImageFindFile( dvd, filename, &size ) )
+     return -1;
+ 
+   tot_size = size;
+@@ -1253,7 +1413,7 @@
+     for( cur = 2; cur < 10; cur++ ) {
+       sprintf( filename, "/%s_TS/%cTS_%02d_%d.%cOB", DVD_TYPE_STRING( dvd->dvd_type ),
+               STREAM_TYPE_STRING( dvd->dvd_type ), title, cur , STREAM_TYPE_STRING( dvd->dvd_type ) );
+-      if( !UDFFindFile( dvd, filename, &size ) )
++      if( !DVDImageFindFile( dvd, filename, &size ) )
+         break;
+ 
+       parts_size[ nr_parts ] = size;
+@@ -1391,7 +1551,7 @@
+   }
+ 
+   if( dvd->isImageFile ) {
+-    if( UDFFindFile( reader, filename, &size ) ) {
++    if( DVDImageFindFile( reader, filename, &size ) ) {
+       statbuf->size = size;
+       statbuf->nr_parts = 1;
+       statbuf->parts_size[ 0 ] = size;
+@@ -1451,7 +1611,8 @@
+    * feed the data */
+   if( dvd_file->cache && (encrypted & DVDINPUT_READ_DECRYPT) == 0 ) {
+     /* Check if we don't exceed the cache (or file) size */
+-    if( block_count + offset > (size_t) dvd_file->filesize )
++    if( offset > (size_t) dvd_file->filesize ||
++        block_count > (size_t) dvd_file->filesize - offset )
+       return 0;
+ 
+     /* Copy the cache at a specified offset into data. offset and block_count
+@@ -1462,6 +1623,9 @@
+     /* return the amount of blocks copied */
+     return block_count;
+   } else {
++    if( dvd_file->ctx->rd->image_filesystem == 2 )
++      return DVDISO9660ReadBlocks( dvd_file->ctx, &dvd_file->iso_file,
++                                  offset, block_count, data, encrypted );
+     /* use dvdinput access */
+     return InternalUDFReadBlocksRaw( dvd_file->ctx, dvd_file->lb_start + offset,
+                              block_count, data, encrypted );
+@@ -1596,7 +1760,11 @@
+   if( dvd_file == NULL || offset <= 0 )
+       return -1;
+ 
+-  if( dvd->isImageFile ) {
++  if( dvd->isImageFile && dvd->image_filesystem == 2 &&
++      (uint64_t)offset > dvd_file->iso_file.size )
++    return -1;
++
++  if( dvd->isImageFile && dvd->image_filesystem != 2 ) {
+     if( force_size < 0 )
+       force_size = (offset - 1) / DVD_VIDEO_LB_LEN + 1;
+     if( dvd_file->filesize < force_size ) {
+@@ -1629,10 +1797,18 @@
+   seek_sector = dvd_file->seek_pos / DVD_VIDEO_LB_LEN;
+   seek_byte   = dvd_file->seek_pos % DVD_VIDEO_LB_LEN;
+ 
+-  numsec = ( ( seek_byte + byte_size ) / DVD_VIDEO_LB_LEN ) +
+-    ( ( ( seek_byte + byte_size ) % DVD_VIDEO_LB_LEN ) ? 1 : 0 );
+-
+-  secbuf_base = malloc( numsec * DVD_VIDEO_LB_LEN + 2048 );
++  if( dvd->isImageFile && dvd->image_filesystem == 2 &&
++      (dvd_file->seek_pos > dvd_file->iso_file.size ||
++       byte_size > dvd_file->iso_file.size - dvd_file->seek_pos) )
++    return -1;
++  if( byte_size > SIZE_MAX - seek_byte ) return -1;
++  size_t total = seek_byte + byte_size;
++  size_t sectors = total / DVD_VIDEO_LB_LEN + (total % DVD_VIDEO_LB_LEN != 0);
++  if( sectors > INT_MAX || sectors > (SIZE_MAX - 2048) / DVD_VIDEO_LB_LEN )
++    return -1;
++  numsec = (unsigned int)sectors;
++
++  secbuf_base = malloc( (size_t)numsec * DVD_VIDEO_LB_LEN + 2048 );
+   if( !secbuf_base ) {
+     Log0( ctx, "Can't allocate memory for file read" );
+     return 0;
+@@ -1752,6 +1928,9 @@
+     return -1;
+   }
+ 
++  int filesystem = DVDImageFileSystem( ctx );
++  if( filesystem < 0 ) return -1;
++
+   buffer_base = malloc( DVD_VIDEO_LB_LEN + 2048 );
+ 
+   if( buffer_base == NULL ) {
+@@ -1762,7 +1941,8 @@
+ 
+   buffer = (unsigned char *)(((uintptr_t)buffer_base & ~((uintptr_t)2047)) + 2048);
+ 
+-  ret = InternalUDFReadBlocksRaw( ctx, 16, 1, buffer, 0 );
++  uint32_t primary_lba = filesystem == 2 ? dvd->iso9660->primary_lba : 16;
++  ret = InternalUDFReadBlocksRaw( ctx, primary_lba, 1, buffer, 0 );
+   if( ret != 1 ) {
+     Log0(ctx, "DVDISOVolumeInfo, failed to "
+              "read ISO9660 Primary Volume Descriptor" );
+diff --git a/src/meson.build b/src/meson.build
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -5,6 +5,7 @@
+ dvdread_src = files(
+     'bitreader.c',
+     'dvd_input.c',
++    'dvd_iso9660.c',
+     'dvd_reader.c',
+     'dvd_udf.c',
+     'ifo_print.c',

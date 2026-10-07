@@ -1,0 +1,33 @@
+--- a/src/vm/vm.c
++++ b/src/vm/vm.c
+@@ -408,19 +408,19 @@
+-  /* save target callbacks */
+-  if(stream_cb)
+-      vm->streamcb = *stream_cb;
+-  else
+-      vm->streamcb = (dvdnav_stream_cb) { NULL, NULL, NULL };
+-
+-  /* bind local callbacks */
+-  vm->dvdstreamcb.pf_seek = vm->streamcb.pf_seek ? dvd_reader_seek_handler : NULL;
+-  vm->dvdstreamcb.pf_read = vm->streamcb.pf_read ? dvd_reader_read_handler : NULL;
+-  vm->dvdstreamcb.pf_readv = vm->streamcb.pf_readv ? dvd_reader_readv_handler : NULL;
+-
+   if (vm->dvd && (dvdroot || (priv && stream_cb))) {
+     /* a new dvd device has been requested */
+     vm_close(vm);
+   }
+   if (!vm->dvd) {
++    /* save target callbacks */
++    if(stream_cb)
++        vm->streamcb = *stream_cb;
++    else
++        vm->streamcb = (dvdnav_stream_cb) { NULL, NULL, NULL };
++
++    /* bind local callbacks */
++    vm->dvdstreamcb.pf_seek = vm->streamcb.pf_seek ? dvd_reader_seek_handler : NULL;
++    vm->dvdstreamcb.pf_read = vm->streamcb.pf_read ? dvd_reader_read_handler : NULL;
++    vm->dvdstreamcb.pf_readv = vm->streamcb.pf_readv ? dvd_reader_readv_handler : NULL;
++
+     /* dvdread stream callback handlers for redirection */
+ #if DVDREAD_VERSION >= DVDREAD_VERSION_CODE(6,1,0)
+     dvd_logger_cb dvdread_logcb = { .pf_log = dvd_reader_logger_handler };

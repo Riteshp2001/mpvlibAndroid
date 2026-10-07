@@ -49,8 +49,9 @@ static inline mpv_node make_node_str(const char *s)
 
 jni_func(jobject, grabThumbnail, jint dimension) {
     auto total_start = std::chrono::high_resolution_clock::now();
-    CHECK_MPV_INIT();
-    init_methods_cache(env);
+    std::lock_guard<std::mutex> lock(g_mpv_mutex);
+    if (!check_mpv_initialized())
+        return NULL;
 
     mpv_node result{};
     {

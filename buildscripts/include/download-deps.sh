@@ -65,6 +65,15 @@ if [ ! -d ffmpeg ]; then
 	fi
 fi
 
+# uavs3d
+if [ ! -d uavs3d ]; then
+	clone_ci_commit https://github.com/uavs3/uavs3d.git "$v_ci_uavs3d" uavs3d
+fi
+if [ "$(git -C uavs3d rev-parse HEAD)" != "$v_ci_uavs3d" ]; then
+	echo "uavs3d source revision does not match the pinned build dependency." >&2
+	exit 1
+fi
+
 # freetype2
 if [ ! -d freetype2 ]; then
 	mkdir freetype2
@@ -126,9 +135,11 @@ if [ ! -d libbluray ]; then
 fi
 
 # libiconv
+../include/patch-libbluray.sh libbluray
+
 if [ ! -d libiconv ]; then
 	mkdir libiconv
-	$WGET https://ftp.gnu.org/pub/gnu/libiconv/libiconv-${v_libiconv}.tar.gz -O - | \
+	$WGET https://mirrors.ocf.berkeley.edu/gnu/libiconv/libiconv-${v_libiconv}.tar.gz -O - | \
 		tar -xz -C libiconv --strip-components=1
 fi
 
@@ -174,12 +185,40 @@ if [ ! -d libdvdread ]; then
 		tar -xJ -C libdvdread --strip-components=1
 fi
 
+libdvdread_patch=../patches/libdvdread-7.0.1-iso9660.patch
+if patch --batch --forward --fuzz=0 --dry-run -d libdvdread -p1 < "$libdvdread_patch" >/dev/null 2>&1; then
+	patch --batch --forward --fuzz=0 -d libdvdread -p1 < "$libdvdread_patch"
+elif ! patch --batch --reverse --fuzz=0 --dry-run -d libdvdread -p1 < "$libdvdread_patch" >/dev/null 2>&1; then
+	echo "libdvdread source does not match $libdvdread_patch." >&2
+	exit 1
+fi
+
 # libdvdnav
 if [ ! -d libdvdnav ]; then
 	mkdir libdvdnav
 	$WGET https://downloads.videolan.org/pub/videolan/libdvdnav/${v_libdvdnav}/libdvdnav-${v_libdvdnav}.tar.xz -O - | \
 		tar -xJ -C libdvdnav --strip-components=1
 fi
+
+for libdvdnav_patch in ../patches/libdvdnav-7.0.0-go-up-hop.patch \
+	../patches/libdvdnav-7.0.0-pgc-cell-duration.patch \
+	../patches/libdvdnav-7.0.0-menu-availability.patch \
+	../patches/libdvdnav-7.0.0-vm-copy-failure.patch \
+	../patches/libdvdnav-7.0.0-time-search-floor.patch \
+	../patches/libdvdnav-7.0.0-menu-audio-count.patch \
+	../patches/libdvdnav-7.0.0-title-chapter-duration.patch \
+	../patches/libdvdnav-7.0.0-preserve-stream-callbacks.patch \
+	../patches/libdvdnav-7.0.0-active-logical-stream.patch \
+	../patches/libdvdnav-7.0.0-title-scope.patch \
+	../patches/libdvdnav-7.0.0-stream-attributes.patch \
+	../patches/libdvdnav-7.0.0-block-replay.patch; do
+	if patch --batch --forward --fuzz=0 --dry-run -d libdvdnav -p1 < "$libdvdnav_patch" >/dev/null 2>&1; then
+		patch --batch --forward --fuzz=0 -d libdvdnav -p1 < "$libdvdnav_patch"
+	elif ! patch --batch --reverse --fuzz=0 --dry-run -d libdvdnav -p1 < "$libdvdnav_patch" >/dev/null 2>&1; then
+		echo "libdvdnav source does not match $libdvdnav_patch." >&2
+		exit 1
+	fi
+done
 
 # rubberband
 if [ ! -d rubberband ]; then
@@ -273,7 +312,7 @@ if [ ! -d curl ]; then
 fi
 
 # mpv
-: "${MPV_GIT_URL:=https://github.com/ijuniorfu/fm-mpv.git}"
+: "${MPV_GIT_URL:=https://github.com/FongMi/mpv.git}"
 : "${MPV_GIT_REF:=fongmi}"
 if [ ! -d mpv ]; then
 	if [ -n "$MPV_GIT_REF" ]; then

@@ -6,7 +6,6 @@ cd "$( dirname "${BASH_SOURCE[0]}" )"
 cleanbuild=0
 nodeps=0
 onlydeps=0
-clang=1
 target=mpv-android
 arch=armv7l
 
@@ -36,56 +35,51 @@ loadndk () {
 	export ANDROID_NDK_ROOT="$ndk"
 	export PATH="$toolchain/bin:$ndk:$PWD/sdk/bin:$PATH"
 }
+
 loadarch () {
 	unset CC CXX CPATH LIBRARY_PATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH
 	unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
+	unset PKG_CONFIG_PATH
 
+	# Vulkan is linked directly and Android provides the loader from API 24.
 	export android_api=24
-	local apilvl=$android_api
-
-	if [ "$1" == "armv7l" ]; then
-		export ndk_suffix=
+	# ndk_triple: the target triple
+	local cc_triple # how the compilers are actually prefixed
+	if [[ "$1" == "armv7l" ]]; then
 		export ndk_triple=arm-linux-androideabi
-		export android_abi=armeabi-v7a
-		cc_triple=armv7a-linux-androideabi$apilvl
-		prefix_name=armv7l
-	elif [ "$1" == "arm64" ]; then
-		export ndk_suffix=-arm64
+		cc_triple=armv7a-linux-androideabi$android_api
+		export prefix_name=armv7l
+	elif [[ "$1" == "arm64" ]]; then
 		export ndk_triple=aarch64-linux-android
-		export android_abi=arm64-v8a
-		cc_triple=$ndk_triple$apilvl
-		prefix_name=arm64
-	elif [ "$1" == "x86" ]; then
-		export ndk_suffix=-x86
+		cc_triple=$ndk_triple$android_api
+		export prefix_name=arm64
+	elif [[ "$1" == "x86" ]]; then
 		export ndk_triple=i686-linux-android
-		export android_abi=x86
-		cc_triple=$ndk_triple$apilvl
-		prefix_name=x86
-	elif [ "$1" == "x86_64" ]; then
-		export ndk_suffix=-x64
+		cc_triple=$ndk_triple$android_api
+		export prefix_name=x86
+	elif [[ "$1" == "x86_64" ]]; then
 		export ndk_triple=x86_64-linux-android
-		export android_abi=x86_64
-		cc_triple=$ndk_triple$apilvl
-		prefix_name=x86_64
+		cc_triple=$ndk_triple$android_api
+		export prefix_name=x86_64
 	else
 		echo "Invalid architecture" >&2
 		exit 1
 	fi
-
-	export prefix_name
+	export ndk_suffix=_$prefix_name
 	export prefix_dir="$PWD/prefix/$prefix_name"
-
-	if [ $clang -eq 1 ]; then
-		export CC=$cc_triple-clang
-		export CXX=$cc_triple-clang++
-	else
-		export CC=$cc_triple-gcc
-		export CXX=$cc_triple-g++
-	fi
-
+	export CC=$cc_triple-clang
+	export CXX=$cc_triple-clang++
 	export LDFLAGS="-Wl,-O1,--icf=safe -Wl,-z,max-page-size=16384"
 	export AR=llvm-ar
 	export RANLIB=llvm-ranlib
+
+	# set up correct paths for pkg-config
+	if ! command -v pkg-config >/dev/null; then
+		echo "pkg-config is missing!" >&2
+		return 1
+	fi
+	export PKG_CONFIG_SYSROOT_DIR="$prefix_dir"
+	export PKG_CONFIG_LIBDIR="$PKG_CONFIG_SYSROOT_DIR/lib/pkgconfig"
 }
 
 setup_prefix () {
@@ -97,12 +91,7 @@ setup_prefix () {
 	fi
 
 	local cpu_family=${ndk_triple%%-*}
-	[ "$cpu_family" == "i686" ] && cpu_family=x86
-
-	if ! command -v pkg-config >/dev/null; then
-		echo "pkg-config not provided!"
-		return 1
-	fi
+	[[ "$cpu_family" == "i686" ]] && cpu_family=x86
 
 	# meson wants to be spoonfed this file, so create it ahead of time
 	# also define: release build, static libs and no source downloads at runtime(!!!)
@@ -134,6 +123,7 @@ CROSSFILE
 	fi
 
 	mkdir -p "$prefix_dir/lib/pkgconfig"
+	# Android provides Vulkan but no pkg-config file; keep this in sync with the pinned NDK's vulkan_core.h.
 	cat >"$prefix_dir/lib/pkgconfig/vulkan.pc" <<VULKANPC
 Name: Vulkan-Loader
 Description: Android Vulkan loader
@@ -144,7 +134,7 @@ VULKANPC
 }
 
 build () {
-	if [ $1 != "mpv-android" ] && [ ! -d deps/$1 ]; then
+	if [[ $1 != "mpv-android" && ! -d deps/$1 ]]; then
 		printf >&2 '\e[1;31m%s\e[m\n' "Target $1 not found"
 		return 1
 	fi
@@ -158,27 +148,27 @@ build () {
 		done
 	fi
 	printf >&2 '\e[1;34m%s\e[m\n' "Building $1..."
-	if [ "$1" == "mpv-android" ]; then
+	if [[ "$1" == "mpv-android" ]]; then
 		pushd ..
 		BUILDSCRIPT=buildscripts/scripts/$1.sh
 	else
 		pushd deps/$1
 		BUILDSCRIPT=../../scripts/$1.sh
 	fi
-	[ $cleanbuild -eq 1 ] && $BUILDSCRIPT clean
-	$BUILDSCRIPT build
+	[ $cleanbuild -eq 1 ] && "$BUILDSCRIPT" clean
+	"$BUILDSCRIPT" build
 	popd
-	markbuilt "$1"
+	markbuilt $1
 }
 
 usage () {
 	printf '%s\n' \
 		"Usage: buildall.sh [options] [target]" \
 		"Builds the specified target (default: $target)" \
+		"" \
 		"-n             Do not build dependencies" \
 		"--only-deps    Build only dependencies of the specified target" \
 		"--clean        Clean build dirs before compiling" \
-		"--gcc          Use gcc compiler (unsupported!)" \
 		"--arch <arch>  Build for specified architecture (default: $arch; supported: armv7l, arm64, x86, x86_64)"
 	exit 0
 }
@@ -193,9 +183,6 @@ while [ $# -gt 0 ]; do
 		;;
 		--only-deps)
 		onlydeps=1
-		;;
-		--gcc)
-		clang=0
 		;;
 		--arch)
 		shift
@@ -215,6 +202,7 @@ while [ $# -gt 0 ]; do
 	shift
 done
 
+loadndk
 loadarch $arch
 setup_prefix
 if [ $onlydeps -eq 1 ]; then
@@ -226,7 +214,8 @@ else
 	build $target
 fi
 
-[ "$target" == "mpv-android" ] && \
-	ls -lh ../app/build/outputs/aar/*.aar
+if wasbuilt "mpv-android"; then
+	ls -lh ../app/build/outputs/aar/*.aar || :
+fi
 
 exit 0

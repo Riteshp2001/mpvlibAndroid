@@ -11,16 +11,15 @@ v_sdk_build_tools=36.0.0
 
 v_lua=5.2.4
 v_unibreak=8.0
-v_harfbuzz=14.4.0
-v_fribidi=1.0.16
+v_harfbuzz=14.5.0
+v_fribidi=1.0.17
 v_freetype=2.14.3
 v_mbedtls=3.6.7
-v_openssl=3.5.7
 v_mujs=1.3.9
 v_libxml2=2.15.4
 v_libmysofa=1.3.5
 v_libaribcaption=1.1.1
-v_curl=8.21.0
+v_curl=8.22.0
 v_libbluray=1.4.1
 v_libiconv=1.19
 v_uchardet=0.0.8
@@ -47,18 +46,18 @@ dep_libxml2=()
 dep_libmysofa=()
 dep_freetype2=()
 dep_libaribcaption=(freetype2)
-dep_ffmpeg=(mbedtls dav1d libxml2 libmysofa libaribcaption)
+dep_uavs3d=()
+dep_ffmpeg=(mbedtls dav1d libxml2 libmysofa libaribcaption uavs3d)
 dep_fribidi=()
 dep_harfbuzz=()
 dep_unibreak=()
 dep_libass=(freetype2 fribidi harfbuzz unibreak)
 dep_lua=()
 dep_mujs=()
-dep_openssl=()
 dep_shaderc=()
 dep_libplacebo=(shaderc)
 dep_curl=(mbedtls)
-dep_libbluray=()
+dep_libbluray=(freetype2)
 dep_libarchive=(libiconv bzip2 xz zstd)
 dep_libdvdread=()
 dep_libdvdnav=(libdvdread)
@@ -71,11 +70,12 @@ dep_mpv_android=(mpv)
 
 # CI resolves these movable branches to immutable commits before selecting a cache.
 v_ci_ffmpeg=release-9.0-fongmi
+v_ci_uavs3d=e72f7c34be2f4de725c1ae498e8c4f3559e99b5b
 v_ci_dav1d=master
 v_ci_libass=master
 v_ci_libplacebo=fongmi
 # Bump when this branch's prefix recipe changes without a version change.
-v_ci_prefix=3
+v_ci_prefix=4
 
 # filename used to uniquely identify a build prefix
 ci_tarball="prefix-fongmi-ndk-${v_ndk}-opengl-vulkan-shaderc-lua-${v_lua}-mujs-${v_mujs}-unibreak-${v_unibreak}-harfbuzz-${v_harfbuzz}-fribidi-${v_fribidi}-freetype-${v_freetype}-libxml2-${v_libxml2}-libmysofa-${v_libmysofa}-libaribcaption-${v_libaribcaption}-mbedtls-${v_mbedtls}-curl-${v_curl}-libbluray-${v_libbluray}-libiconv-${v_libiconv}-uchardet-${v_uchardet}-bzip2-${v_bzip2}-xz-${v_xz}-zstd-${v_zstd}-libarchive-${v_libarchive}-libdvdread-${v_libdvdread}-libdvdnav-${v_libdvdnav}-rubberband-${v_rubberband}-ffmpeg-${v_ci_ffmpeg}-prefix-${v_ci_prefix}.tgz"

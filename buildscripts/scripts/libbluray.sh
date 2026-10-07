@@ -15,6 +15,15 @@ fi
 
 unset CC CXX # meson wants these unset
 
+if grep -q "java_arch = 'arm'" meson.build; then
+	${SED:-sed} -i.bak "/^elif host_machine.cpu_family() == 'aarch64'$/,/^elif / s/java_arch = 'arm'/java_arch = 'aarch64'/" meson.build
+	rm -f meson.build.bak
+fi
+if [ "$ndk_suffix" = _arm64 ] && ! grep -A1 "^elif host_machine.cpu_family() == 'aarch64'$" meson.build | grep -q "java_arch = 'aarch64'"; then
+	echo "libbluray aarch64 JVM search path was not patched" >&2
+	exit 1
+fi
+
 meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
 	-Denable_tools=false \
 	-Denable_docs=false \
@@ -23,7 +32,7 @@ meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
 	-Dbdj_jar=disabled \
 	-Dembed_udfread=false \
 	-Dfontconfig=disabled \
-	-Dfreetype=disabled \
+	-Dfreetype=enabled \
 	-Dlibxml2=disabled
 
 ninja -C $build -j$cores

@@ -145,14 +145,15 @@ Utils.VERSIONS.dependencies.forEach { (name, version) ->
 | shaderc | Android NDK bundled version |
 | libass | latest |
 | dav1d | latest |
+| uavs3d | `e72f7c34be2f4de725c1ae498e8c4f3559e99b5b` |
 | libmysofa | 1.3.5 |
 | Lua | 5.2.4 |
 | MuJS (JavaScript) | 1.3.9 |
 | MbedTLS | 3.6.7 |
 | FongMi extensions | libaribcaption, curl, libbluray, iconv, uchardet, libarchive, dvdnav, rubberband |
-| HarfBuzz | 14.4.0 |
+| HarfBuzz | 14.5.0 |
 | FreeType | 2.14.3 |
-| FriBidi | 1.0.16 |
+| FriBidi | 1.0.17 |
 | libunibreak | 8.0 |
 | Android NDK | r30 |
 | Min API | 24 (Android 7.0) |

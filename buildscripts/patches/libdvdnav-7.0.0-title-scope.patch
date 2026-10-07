@@ -1,0 +1,1023 @@
+--- /dev/null
++++ b/src/title_layout.c
+@@ -0,0 +1,579 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++#include <dvdread/ifo_read.h>
++#include "dvdnav/title_layout.h"
++#include "vm/decoder.h"
++#include "vm/vm.h"
++#include "vm/getset.h"
++#include "dvdnav_internal.h"
++
++/* Match the PGC-local clock: count an angle group once, at its first cell. */
++static dvdnav_title_layout_status_t pgc_times(
++    const pgc_t *pgc, uint32_t entry_program,
++    uint64_t *entry_time, uint64_t *end_time) {
++  uint64_t cell_starts[256];
++  uint64_t total = 0, angle_duration = 0;
++  uint32_t i;
++  int in_angle = 0;
++
++  if (!pgc || !pgc->nr_of_programs || !pgc->nr_of_cells ||
++      !pgc->program_map || !pgc->cell_playback ||
++      !entry_program || entry_program > pgc->nr_of_programs)
++    return DVDNAV_TITLE_LAYOUT_ERROR;
++  if (pgc->pg_playback_mode || pgc->still_time == 255 ||
++      (pgc->command_tbl && (pgc->command_tbl->nr_of_pre ||
++       pgc->command_tbl->nr_of_post || pgc->command_tbl->nr_of_cell)))
++    return DVDNAV_TITLE_LAYOUT_UNSUPPORTED;
++
++  for (i = 0; i < pgc->nr_of_cells; i++) {
++    const cell_playback_t *cell = &pgc->cell_playback[i];
++    int64_t duration = dvdnav_convert_time(&cell->playback_time);
++    if (duration < 0)
++      return DVDNAV_TITLE_LAYOUT_ERROR;
++    if (cell->cell_cmd_nr || cell->playback_mode || cell->still_time == 255)
++      return DVDNAV_TITLE_LAYOUT_UNSUPPORTED;
++    cell_starts[i] = total;
++    if (cell->block_type == BLOCK_TYPE_ANGLE_BLOCK) {
++      if (cell->block_mode == BLOCK_MODE_FIRST_CELL) {
++        if (in_angle)
++          return DVDNAV_TITLE_LAYOUT_ERROR;
++        in_angle = 1;
++        angle_duration = (uint64_t)duration;
++      } else {
++        if (!in_angle || (cell->block_mode != BLOCK_MODE_IN_BLOCK &&
++                          cell->block_mode != BLOCK_MODE_LAST_CELL))
++          return DVDNAV_TITLE_LAYOUT_ERROR;
++        if ((uint64_t)duration != angle_duration)
++          return DVDNAV_TITLE_LAYOUT_UNSUPPORTED;
++        if (cell->block_mode == BLOCK_MODE_LAST_CELL)
++          in_angle = 0;
++        continue;
++      }
++    } else if (cell->block_type || cell->block_mode || in_angle) {
++      return DVDNAV_TITLE_LAYOUT_ERROR;
++    }
++    if (UINT64_MAX - total < (uint64_t)duration)
++      return DVDNAV_TITLE_LAYOUT_ERROR;
++    total += (uint64_t)duration;
++  }
++  if (in_angle)
++    return DVDNAV_TITLE_LAYOUT_ERROR;
++  for (i = 0; i < pgc->nr_of_programs; i++) {
++    uint32_t cellnr = pgc->program_map[i];
++    const cell_playback_t *cell;
++    if (!cellnr || cellnr > pgc->nr_of_cells ||
++        (i && cellnr <= pgc->program_map[i - 1]))
++      return DVDNAV_TITLE_LAYOUT_ERROR;
++    cell = &pgc->cell_playback[cellnr - 1];
++    if (cell->block_type == BLOCK_TYPE_ANGLE_BLOCK &&
++        cell->block_mode != BLOCK_MODE_FIRST_CELL)
++      return DVDNAV_TITLE_LAYOUT_UNSUPPORTED;
++  }
++  *entry_time = cell_starts[pgc->program_map[entry_program - 1] - 1];
++  *end_time = total;
++  return DVDNAV_TITLE_LAYOUT_LINEAR;
++}
++
++dvdnav_title_layout_status_t dvdnav_get_title_layout(
++    dvdnav_t *self, int32_t title, dvdnav_title_layout_t **layout) {
++  dvdnav_title_layout_status_t status = DVDNAV_TITLE_LAYOUT_ERROR;
++  dvdnav_title_layout_t *result = NULL;
++  dvdnav_title_span_t *spans = NULL;
++  uint8_t *visited = NULL;
++  ifo_handle_t *ifo = NULL;
++  const title_info_t *info;
++  const ttu_t *parts;
++  uint32_t pgcn, program, max_spans;
++
++  if (!layout)
++    return status;
++  *layout = NULL;
++  if (!self || title < 1)
++    return status;
++  pthread_mutex_lock(&self->vm_lock);
++  if (!self->vm || !self->vm->vmgi || !self->vm->vmgi->tt_srpt ||
++      !self->vm->vmgi->tt_srpt->title ||
++      title > self->vm->vmgi->tt_srpt->nr_of_srpts)
++    goto done;
++  info = &self->vm->vmgi->tt_srpt->title[title - 1];
++  /* Button commands are in NAV packs, not PGC command tables. */
++  if (info->pb_ty.jlc_exists_in_button_cmd) {
++    status = DVDNAV_TITLE_LAYOUT_UNSUPPORTED;
++    goto done;
++  }
++  ifo = vm_get_title_ifo(self->vm, title);
++  if (!ifo || !ifo->vts_pgcit || !ifo->vts_pgcit->pgci_srp ||
++      !ifo->vts_ptt_srpt || !ifo->vts_ptt_srpt->title ||
++      !info->vts_ttn || info->vts_ttn > ifo->vts_ptt_srpt->nr_of_srpts)
++    goto done;
++  parts = &ifo->vts_ptt_srpt->title[info->vts_ttn - 1];
++  max_spans = ifo->vts_pgcit->nr_of_pgci_srp;
++  if (!max_spans || !parts->nr_of_ptts || !parts->ptt)
++    goto done;
++  result = calloc(1, sizeof(*result));
++  spans = calloc(max_spans, sizeof(*spans));
++  visited = calloc(max_spans, sizeof(*visited));
++  if (!result || !spans || !visited)
++    goto done;
++  result->title = (uint32_t)title;
++  result->title_set = info->title_set_nr;
++  result->spans = spans;
++  pgcn = parts->ptt[0].pgcn;
++  program = parts->ptt[0].pgn;
++  if (!pgcn)
++    goto done;
++  while (pgcn) {
++    const pgci_srp_t *srp;
++    const pgc_t *pgc;
++    uint64_t start, end, duration;
++    dvdnav_title_span_t *span;
++    if (pgcn > max_spans) {
++      status = DVDNAV_TITLE_LAYOUT_ERROR;
++      goto done;
++    }
++    if (visited[pgcn - 1]) {
++      status = DVDNAV_TITLE_LAYOUT_UNSUPPORTED;
++      goto done;
++    }
++    visited[pgcn - 1] = 1;
++    srp = &ifo->vts_pgcit->pgci_srp[pgcn - 1];
++    if (srp->block_type || srp->block_mode) {
++      status = DVDNAV_TITLE_LAYOUT_UNSUPPORTED;
++      goto done;
++    }
++    pgc = srp->pgc;
++    status = pgc_times(pgc, program, &start, &end);
++    if (status != DVDNAV_TITLE_LAYOUT_LINEAR)
++      goto done;
++    duration = end - start;
++    if (UINT64_MAX - result->duration < duration) {
++      status = DVDNAV_TITLE_LAYOUT_ERROR;
++      goto done;
++    }
++    span = &spans[result->span_count++];
++    span->pgcn = pgcn;
++    span->entry_program = program;
++    span->title_start = result->duration;
++    span->pgc_start = start;
++    span->duration = duration;
++    result->duration += duration;
++    pgcn = pgc->next_pgc_nr;
++    program = 1;
++  }
++  if (!result->duration) {
++    status = DVDNAV_TITLE_LAYOUT_UNSUPPORTED;
++    goto done;
++  }
++  *layout = result;
++  result = NULL;
++  spans = NULL;
++done:
++  if (ifo)
++    vm_ifo_close(ifo);
++  pthread_mutex_unlock(&self->vm_lock);
++  free(visited);
++  free(spans);
++  free(result);
++  return status;
++}
++
++void dvdnav_free_title_layout(dvdnav_title_layout_t *layout) {
++  if (layout) {
++    free((void *)layout->spans);
++    free(layout);
++  }
++}
++
++dvdnav_status_t dvdnav_get_current_title_position(
++    dvdnav_t *self, dvdnav_title_position_t *position) {
++  dvdnav_status_t status = DVDNAV_STATUS_ERR;
++  dvdnav_title_position_t result;
++  const dvd_state_t *state;
++  uint64_t start;
++  int title;
++  if (!self || !position)
++    return status;
++  pthread_mutex_lock(&self->vm_lock);
++  if (!self->started || !self->vm || !self->vm->vmgi ||
++      !self->vm->vmgi->tt_srpt || !self->vm->vmgi->tt_srpt->title)
++    goto done;
++  state = &self->vm->state;
++  if (state->domain != DVD_DOMAIN_VTSTitle || !state->pgc ||
++      state->vtsN < 1 || state->vtsN > UINT16_MAX ||
++      state->pgcN < 1 || state->pgcN > UINT16_MAX || state->pgN < 1 ||
++      !self->vm->vtsi || !self->vm->vtsi->vts_pgcit ||
++      state->pgcN > self->vm->vtsi->vts_pgcit->nr_of_pgci_srp ||
++      state->pgN > state->pgc->nr_of_programs || state->cellN < 1 ||
++      state->cellN > state->pgc->nr_of_cells ||
++      state->AGL_REG < 1 || state->AGL_REG > 9 ||
++      dvdnav_pgc_selected_angle_time(state->pgc, state->AGL_REG,
++          state->pgc->nr_of_cells, &result.pgc_duration) != DVDNAV_STATUS_OK ||
++      dvdnav_pgc_selected_angle_time(state->pgc, state->AGL_REG,
++          state->cellN - 1, &start) != DVDNAV_STATUS_OK)
++    goto done;
++  if (self->cur_cell_time < 0 ||
++      UINT64_MAX - start < (uint64_t)self->cur_cell_time)
++    goto done;
++  title = get_TT(self->vm, state->vtsN, state->VTS_TTN_REG);
++  if (title < 1 || title > UINT16_MAX)
++    goto done;
++  result.title = (uint32_t)title;
++  result.title_set = (uint32_t)state->vtsN;
++  result.pgcn = (uint32_t)state->pgcN;
++  result.program = (uint32_t)state->pgN;
++  result.angle = state->AGL_REG;
++  result.pgc_time = start + (uint64_t)self->cur_cell_time;
++  *position = result;
++  status = DVDNAV_STATUS_OK;
++done:
++  pthread_mutex_unlock(&self->vm_lock);
++  return status;
++}
++
++/* Caller holds vm_lock. The program/time fields are cursors, not identity. */
++static int matches_title_angle(
++    dvdnav_t *self, const dvdnav_title_position_t *expected) {
++  return expected && expected->title && expected->title <= UINT16_MAX &&
++      expected->title_set && expected->title_set <= UINT16_MAX &&
++      expected->pgcn && expected->pgcn <= UINT16_MAX &&
++      expected->angle >= 1 && expected->angle <= 9 &&
++      self->vm && (self->started || self->vm->stopped) && self->vm->vmgi &&
++      self->vm->vmgi->tt_srpt && self->vm->vmgi->tt_srpt->title &&
++      self->vm->state.domain == DVD_DOMAIN_VTSTitle &&
++      self->vm->state.vtsN == (int)expected->title_set &&
++      self->vm->vtsi && self->vm->vtsi->vts_pgcit &&
++      expected->pgcn <= self->vm->vtsi->vts_pgcit->nr_of_pgci_srp &&
++      self->vm->state.AGL_REG == expected->angle &&
++      get_TT(self->vm, self->vm->state.vtsN, self->vm->state.VTS_TTN_REG) ==
++          (int)expected->title;
++}
++
++dvdnav_status_t dvdnav_title_part_play(
++    dvdnav_t *self, const dvdnav_title_position_t *expected, int32_t part) {
++  dvdnav_status_t status = DVDNAV_STATUS_ERR;
++  vm_t *candidate = NULL;
++  const title_info_t *title;
++  const ttu_t *parts;
++  ptt_info_t target;
++  const pgc_t *pgc;
++  if (!self || !expected || part < 1)
++    return status;
++  pthread_mutex_lock(&self->vm_lock);
++  if (!matches_title_angle(self, expected) || !self->vm->state.pgc ||
++      !self->file || self->position_current.domain != DVD_DOMAIN_VTSTitle ||
++      self->position_current.vts != (int)expected->title_set ||
++      expected->title > self->vm->vmgi->tt_srpt->nr_of_srpts ||
++      !self->vm->vtsi->vts_ptt_srpt || !self->vm->vtsi->vts_ptt_srpt->title)
++    goto done;
++  title = &self->vm->vmgi->tt_srpt->title[expected->title - 1];
++  if (part > title->nr_of_ptts || title->vts_ttn < 1 ||
++      title->vts_ttn > self->vm->vtsi->vts_ptt_srpt->nr_of_srpts)
++    goto done;
++  parts = &self->vm->vtsi->vts_ptt_srpt->title[title->vts_ttn - 1];
++  if (!parts->ptt || part > parts->nr_of_ptts)
++    goto done;
++  target = parts->ptt[part - 1];
++  if (!target.pgcn || target.pgcn > self->vm->vtsi->vts_pgcit->nr_of_pgci_srp ||
++      !self->vm->vtsi->vts_pgcit->pgci_srp)
++    goto done;
++  pgc = self->vm->vtsi->vts_pgcit->pgci_srp[target.pgcn - 1].pgc;
++  if (!pgc || !target.pgn || target.pgn > pgc->nr_of_programs)
++    goto done;
++  candidate = vm_new_copy(self->vm);
++  if (!candidate)
++    goto done;
++  /* Retained presentation ownership survives read-ahead STOP. Do not restart
++   * the live VM or execute First Play; use the ordinary PTT entry semantics. */
++  candidate->stopped = 0;
++  if (!vm_jump_title_part(candidate, (int)expected->title, part))
++    goto done;
++  candidate->hop_channel++;
++  vm_merge(self->vm, candidate);
++  self->started = 1;
++  self->position_current.still = 0;
++  self->cur_cell_time = 0;
++  status = DVDNAV_STATUS_OK;
++done:
++  if (candidate)
++    vm_free_copy(candidate);
++  pthread_mutex_unlock(&self->vm_lock);
++  return status;
++}
++
++dvdnav_status_t dvdnav_pgc_time_search_floor(
++    dvdnav_t *self, const dvdnav_title_position_t *expected, uint64_t pgc_time) {
++  dvdnav_status_t status = DVDNAV_STATUS_ERR;
++  dvdnav_t probe;
++  vm_t *candidate = NULL;
++  if (!self || !expected)
++    return status;
++  pthread_mutex_lock(&self->vm_lock);
++  if (!matches_title_angle(self, expected))
++    goto done;
++  /* Prefetch can advance the live VM beyond the presented PGC. The caller's
++   * epoch owns that presentation scope; enter it only on an isolated candidate.
++   * A command that redirects entry must not silently seek another PGC. */
++  if (!self->started || self->vm->stopped ||
++      self->vm->state.pgcN != (int)expected->pgcn) {
++    candidate = vm_new_copy(self->vm);
++    if (!candidate)
++      goto done;
++    /* A read-ahead STOP exhausts the reader, not the caller's presentation
++     * scope. Resume only this candidate until the NAV landing is proven. */
++    candidate->stopped = 0;
++    if (!vm_jump_title_program(candidate, (int)expected->title,
++                               (int)expected->pgcn, 1) ||
++        candidate->stopped || candidate->state.domain != DVD_DOMAIN_VTSTitle ||
++        candidate->state.vtsN != (int)expected->title_set ||
++        candidate->state.pgcN != (int)expected->pgcn ||
++        candidate->state.AGL_REG != expected->angle ||
++        get_TT(candidate, candidate->state.vtsN, candidate->state.VTS_TTN_REG) !=
++            (int)expected->title)
++      goto done;
++  }
++  /* The floor seeker owns its transaction even when the live VM is borrowed. */
++  memset(&probe, 0, sizeof(probe));
++  probe.vm = candidate ? candidate : self->vm;
++  probe.file = self->file;
++  probe.priv = self->priv;
++  probe.logcb = self->logcb;
++  probe.started = 1;
++  probe.pgc_based = self->pgc_based;
++  probe.position_current = self->position_current;
++  pthread_mutex_init(&probe.vm_lock, NULL);
++  status = dvdnav_time_search_floor_selected_angle(&probe, pgc_time);
++  pthread_mutex_destroy(&probe.vm_lock);
++  if (status == DVDNAV_STATUS_OK) {
++    if (candidate)
++      vm_merge(self->vm, candidate);
++    self->started = 1;
++    self->cur_cell_time = probe.cur_cell_time;
++    self->verified_seek_hop = probe.verified_seek_hop;
++    self->verified_seek_angle = probe.verified_seek_angle;
++  } else {
++    memcpy(self->err_str, probe.err_str, sizeof(self->err_str));
++  }
++done:
++  if (candidate)
++    vm_free_copy(candidate);
++  pthread_mutex_unlock(&self->vm_lock);
++  return status;
++}
++
++/* Caller holds vm_lock. A non-NULL layout selects title-global coordinates;
++ * otherwise only PTT entries in pgcn are returned with PGC-local coordinates. */
++static dvdnav_status_t describe_chapters(
++    dvdnav_t *self, uint32_t title, uint32_t title_set, uint32_t pgcn,
++    const dvdnav_title_layout_t *layout, uint32_t angle,
++    dvdnav_chapter_t **chapters, uint32_t *count) {
++  dvdnav_status_t status = DVDNAV_STATUS_ERR;
++  const title_info_t *info;
++  const ttu_t *parts;
++  ifo_handle_t *ifo = NULL;
++  dvdnav_chapter_t *entries = NULL;
++  uint32_t i, size = 0;
++  if (!self->vm || !self->vm->vmgi || !self->vm->vmgi->tt_srpt ||
++      !self->vm->vmgi->tt_srpt->title || !title ||
++      title > self->vm->vmgi->tt_srpt->nr_of_srpts)
++    goto done;
++  info = &self->vm->vmgi->tt_srpt->title[title - 1];
++  if (info->title_set_nr != title_set)
++    goto done;
++  ifo = vm_get_title_ifo(self->vm, (int)title);
++  if (!ifo || !ifo->vts_pgcit || !ifo->vts_pgcit->pgci_srp ||
++      !ifo->vts_ptt_srpt || !ifo->vts_ptt_srpt->title ||
++      !info->vts_ttn || info->vts_ttn > ifo->vts_ptt_srpt->nr_of_srpts)
++    goto done;
++  parts = &ifo->vts_ptt_srpt->title[info->vts_ttn - 1];
++  if (parts->nr_of_ptts && !parts->ptt)
++    goto done;
++  if (parts->nr_of_ptts) {
++    entries = calloc(parts->nr_of_ptts, sizeof(*entries));
++    if (!entries)
++      goto done;
++  }
++  for (i = 0; i < parts->nr_of_ptts; i++) {
++    const ptt_info_t *part = &parts->ptt[i];
++    const pgc_t *pgc;
++    uint32_t cell;
++    uint64_t time;
++    if (!layout && part->pgcn != pgcn)
++      continue;
++    if (!part->pgcn || part->pgcn > ifo->vts_pgcit->nr_of_pgci_srp)
++      goto done;
++    pgc = ifo->vts_pgcit->pgci_srp[part->pgcn - 1].pgc;
++    if (!pgc || !pgc->program_map || !pgc->cell_playback ||
++        !part->pgn || part->pgn > pgc->nr_of_programs)
++      goto done;
++    cell = pgc->program_map[part->pgn - 1];
++    if (!cell || cell > pgc->nr_of_cells)
++      goto done;
++    /* A program's coordinate is the start of its angle group. */
++    while (cell > 1 &&
++           pgc->cell_playback[cell - 1].block_type == BLOCK_TYPE_ANGLE_BLOCK &&
++           pgc->cell_playback[cell - 1].block_mode != BLOCK_MODE_FIRST_CELL)
++      cell--;
++    if (dvdnav_pgc_selected_angle_time(pgc, (int)angle, cell - 1, &time) != DVDNAV_STATUS_OK)
++      goto done;
++    if (layout && dvdnav_title_layout_position(
++            layout, title, part->pgcn, time, &time) != DVDNAV_STATUS_OK)
++      continue;
++    entries[size].chapter = i + 1;
++    entries[size++].time = time;
++  }
++  *chapters = entries;
++  *count = size;
++  entries = NULL;
++  status = DVDNAV_STATUS_OK;
++done:
++  if (ifo)
++    vm_ifo_close(ifo);
++  free(entries);
++  return status;
++}
++
++dvdnav_status_t dvdnav_get_current_pgc_chapters(
++    dvdnav_t *self, const dvdnav_title_position_t *expected,
++    dvdnav_chapter_t **chapters, uint32_t *count) {
++  dvdnav_status_t status = DVDNAV_STATUS_ERR;
++  if (!chapters || !count)
++    return status;
++  *chapters = NULL;
++  *count = 0;
++  if (!self || !expected)
++    return status;
++  pthread_mutex_lock(&self->vm_lock);
++  if (matches_title_angle(self, expected))
++    status = describe_chapters(self, expected->title, expected->title_set,
++                              expected->pgcn, NULL, expected->angle, chapters, count);
++  pthread_mutex_unlock(&self->vm_lock);
++  return status;
++}
++
++dvdnav_status_t dvdnav_get_title_chapters(
++    dvdnav_t *self, const dvdnav_title_layout_t *layout,
++    dvdnav_chapter_t **chapters, uint32_t *count) {
++  dvdnav_status_t status = DVDNAV_STATUS_ERR;
++  if (!chapters || !count)
++    return status;
++  *chapters = NULL;
++  *count = 0;
++  if (!self || !layout)
++    return status;
++  pthread_mutex_lock(&self->vm_lock);
++  status = describe_chapters(self, layout->title, layout->title_set, 0,
++                            layout, 1, chapters, count);
++  pthread_mutex_unlock(&self->vm_lock);
++  return status;
++}
++
++void dvdnav_free_chapters(dvdnav_chapter_t *chapters) {
++  free(chapters);
++}
++
++dvdnav_status_t dvdnav_title_layout_position(
++    const dvdnav_title_layout_t *layout, uint32_t title, uint32_t pgcn,
++    uint64_t pgc_time, uint64_t *title_time) {
++  uint32_t i;
++  if (!layout || !title_time || layout->title != title)
++    return DVDNAV_STATUS_ERR;
++  for (i = 0; i < layout->span_count; i++) {
++    const dvdnav_title_span_t *span = &layout->spans[i];
++    if (span->pgcn == pgcn) {
++      if (pgc_time < span->pgc_start ||
++          pgc_time - span->pgc_start > span->duration)
++        return DVDNAV_STATUS_ERR;
++      *title_time = span->title_start + pgc_time - span->pgc_start;
++      return DVDNAV_STATUS_OK;
++    }
++  }
++  return DVDNAV_STATUS_ERR;
++}
++
++dvdnav_status_t dvdnav_title_layout_seek(
++    const dvdnav_title_layout_t *layout, uint64_t title_time,
++    uint32_t *span_index, uint64_t *pgc_time) {
++  uint32_t i;
++  if (!layout || !span_index || !pgc_time || title_time >= layout->duration)
++    return DVDNAV_STATUS_ERR;
++  for (i = 0; i < layout->span_count; i++) {
++    const dvdnav_title_span_t *span = &layout->spans[i];
++    if (title_time >= span->title_start &&
++        title_time - span->title_start < span->duration) {
++      *span_index = i;
++      *pgc_time = span->pgc_start + title_time - span->title_start;
++      return DVDNAV_STATUS_OK;
++    }
++  }
++  return DVDNAV_STATUS_ERR;
++}
++
++dvdnav_status_t dvdnav_title_time_search_floor(
++    dvdnav_t *self, const dvdnav_title_layout_t *layout, uint64_t title_time) {
++  dvdnav_status_t status = DVDNAV_STATUS_ERR;
++  dvdnav_t probe;
++  vm_t *candidate = NULL;
++  const dvdnav_title_span_t *span;
++  uint32_t index;
++  uint64_t local;
++  if (!self || dvdnav_title_layout_seek(layout, title_time, &index, &local) !=
++                   DVDNAV_STATUS_OK)
++    return status;
++  pthread_mutex_lock(&self->vm_lock);
++  if (!self->vm || (!self->started && !self->vm->stopped) || !self->vm->vmgi ||
++      !self->vm->vmgi->tt_srpt || !self->vm->state.pgc || !self->file ||
++      !self->pgc_based || self->position_current.still ||
++      self->vm->state.domain != DVD_DOMAIN_VTSTitle ||
++      self->position_current.domain != DVD_DOMAIN_VTSTitle ||
++      self->position_current.vts != self->vm->state.vtsN ||
++      self->vm->state.vtsN != (int)layout->title_set ||
++      get_TT(self->vm, self->vm->state.vtsN, self->vm->state.VTS_TTN_REG) !=
++          (int)layout->title)
++    goto done;
++  candidate = vm_new_copy(self->vm);
++  if (!candidate)
++    goto done;
++  span = &layout->spans[index];
++  /* The same retained title/VOB may have reached read-ahead STOP while its
++   * final samples are still presented. Do not restart or reset the live VM. */
++  candidate->stopped = 0;
++  if (!vm_jump_title_program(candidate, (int)layout->title, (int)span->pgcn,
++                             (int)span->entry_program) ||
++      candidate->stopped || candidate->state.domain != DVD_DOMAIN_VTSTitle ||
++      candidate->state.vtsN != (int)layout->title_set ||
++      candidate->state.pgcN != (int)span->pgcn)
++    goto done;
++  /* Borrow only the same-VTS VOB and log context. The probe has its own mutex
++   * and copied VM; floor seek's existing candidate transaction stays isolated. */
++  memset(&probe, 0, sizeof(probe));
++  probe.vm = candidate;
++  probe.file = self->file;
++  probe.priv = self->priv;
++  probe.logcb = self->logcb;
++  probe.started = 1;
++  probe.pgc_based = self->pgc_based;
++  probe.position_current = self->position_current;
++  pthread_mutex_init(&probe.vm_lock, NULL);
++  status = dvdnav_time_search_floor(&probe, local);
++  pthread_mutex_destroy(&probe.vm_lock);
++  if (status == DVDNAV_STATUS_OK) {
++    vm_merge(self->vm, candidate);
++    self->started = 1;
++    self->cur_cell_time = probe.cur_cell_time;
++    self->verified_seek_hop = probe.verified_seek_hop;
++    self->verified_seek_angle = probe.verified_seek_angle;
++  } else {
++    memcpy(self->err_str, probe.err_str, sizeof(self->err_str));
++  }
++done:
++  if (candidate)
++    vm_free_copy(candidate);
++  pthread_mutex_unlock(&self->vm_lock);
++  return status;
++}
+--- /dev/null
++++ b/src/dvdnav/title_layout.h
+@@ -0,0 +1,210 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++#ifndef LIBDVDNAV_TITLE_LAYOUT_H
++#define LIBDVDNAV_TITLE_LAYOUT_H
++
++#include <dvdnav/dvdnav.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++typedef enum {
++  DVDNAV_TITLE_LAYOUT_ERROR = -1,
++  DVDNAV_TITLE_LAYOUT_UNSUPPORTED = 0,
++  DVDNAV_TITLE_LAYOUT_LINEAR = 1
++} dvdnav_title_layout_status_t;
++
++/* All times use the 90 kHz DVD clock. PGC and program numbers are one-based. */
++typedef struct {
++  uint32_t pgcn;
++  uint32_t entry_program;
++  uint64_t title_start;
++  uint64_t pgc_start;
++  uint64_t duration;
++} dvdnav_title_span_t;
++
++/* Read-only snapshot, independent of the IFO and dvdnav handle after creation. */
++typedef struct {
++  uint32_t title;
++  uint32_t title_set;
++  uint32_t span_count;
++  uint64_t duration;
++  const dvdnav_title_span_t *spans;
++} dvdnav_title_layout_t;
++
++typedef struct {
++  uint32_t title;
++  uint32_t title_set;
++  uint32_t pgcn;
++  uint32_t program;
++  uint32_t angle;
++  uint64_t pgc_time;
++  uint64_t pgc_duration;
++} dvdnav_title_position_t;
++
++/* Authored one-based PTT number and 90 kHz time in the requested scope. */
++typedef struct {
++  uint32_t chapter;
++  uint64_t time;
++} dvdnav_chapter_t;
++
++/*
++ * Describe the finite route entered by dvdnav_title_play(title), following
++ * authored next-PGC links. This does not start or alter the VM. LINEAR means
++ * there are no commands, random/shuffle programs, repeated PGCs, indefinite
++ * holds, parental PGC alternatives, or angle-dependent durations on that route.
++ * All command tables are conservatively unsupported, including non-branching
++ * commands. VM playback remains available for unsupported layouts.
++ *
++ * Durations are media time, not wall-clock time: finite still holds do not add
++ * media time. Navigation and sector/ILVU selection remain owned by the VM.
++ * This is a coordinate capability, not permission or a guarantee to seek;
++ * stills, UOPs and the existing native seek implementation can reject a seek.
++ *
++ * On LINEAR, *layout is an owned snapshot, freed with free_title_layout().
++ * Otherwise *layout is NULL. ERROR denotes invalid arguments, invalid/missing
++ * IFO data, or allocation/read failure; UNSUPPORTED is valid authoring that this
++ * fixed-route representation cannot describe. Caller must serialize close with
++ * this operation and invalidate the snapshot when replacing the disc/title.
++ */
++DVDNAV_API dvdnav_title_layout_status_t dvdnav_get_title_layout(
++    dvdnav_t *self, int32_t title, dvdnav_title_layout_t **layout);
++
++DVDNAV_API void dvdnav_free_title_layout(dvdnav_title_layout_t *layout);
++
++/*
++ * Capture one consistent raw VM coordinate under vm_lock, without starting the
++ * VM. Resolves title from the current VTS and VTS title register through TT_SRPT,
++ * so it does not depend on the sometimes stale global title register or require
++ * a PTT for this program. Fails outside the title domain or for invalid state.
++ * Does not change *position on failure. pgc_time and pgc_duration are the
++ * current PGC's selected-angle media coordinates, counting each angle group
++ * once with the duration of the member selected by the VM. They are not a global
++ * title clock or a prediction of VM traversal.
++ * Commands, repeated PGCs and indefinite stills do not remove these coordinates.
++ * Use title_layout_position() with a matching LINEAR layout for a title clock.
++ * The PGC scope identity is (title, title_set, pgcn, angle); program is a cursor
++ * within that scope. Title, title_set and pgcn are in [1, UINT16_MAX], and angle
++ * is in [1, 9]. Changing angle can change this clock and its duration. The caller
++ * additionally owns disc/session generation identity.
++ *
++ * After get_next_block(), call this on the same serialized VM owner before any
++ * further navigation/read, and store the result with that block. Prefetch/drain
++ * consumers must use this stored value rather than capturing the later live VM.
++ * This function does not make an earlier block read atomic with the snapshot;
++ * the caller owns that serialization and the disc/session generation.
++ */
++DVDNAV_API dvdnav_status_t dvdnav_get_current_title_position(
++    dvdnav_t *self, dvdnav_title_position_t *position);
++
++/*
++ * Seek in the supplied presentation PGC while title/title_set/angle still match.
++ * The PGC must exist in this VTS. Prefetch may have advanced the live PGC; an
++ * isolated candidate re-enters the expected PGC and verifies its identity before
++ * seeking. The caller must reject a stale presentation epoch.
++ * The identity check and verified floor seek are atomic under vm_lock. Other
++ * fields in expected are not used as preconditions: normal playback can advance
++ * the cursor within the same PGC. Caller must validate disc/session generation.
++ * pgc_time is in 90 kHz ticks; the selected PGC supplies the valid [0, duration)
++ * range.
++ * Native still/domain/seek restrictions remain in force. Commands do not make
++ * this API unavailable merely because a fixed whole-title layout is unsupported.
++ * A read-ahead STOP may be resumed only while this title/VTS and its VOB remain
++ * current. Restart occurs on the candidate, and live started/stopped state is
++ * committed with the verified landing. Failure preserves those flags as well
++ * as live VM identity, hop, position and verified-landing state.
++ */
++DVDNAV_API dvdnav_status_t dvdnav_pgc_time_search_floor(
++    dvdnav_t *self, const dvdnav_title_position_t *expected, uint64_t pgc_time);
++
++/*
++ * Enter an authored one-based PTT in the supplied presentation title. The live
++ * title/title_set/angle must still match expected and its title VOB must remain
++ * current. Prefetch may have changed the PGC/program or reached STOP. The caller
++ * owns disc/session and presentation-epoch validity; program/time are cursors,
++ * not request identity. No LINEAR layout capability is required.
++ *
++ * Uses the same PTT/program entry and pre-command semantics as part_play(), on
++ * an isolated candidate VM. Expected identity is checked before the operation;
++ * authored changes, including angle changes, remain governed by part_play().
++ * Only success merges the VM, marks it started and emits a hop; failure
++ * preserves live VM, file, position and landing state.
++ * This does not change part_play() or restart the VM through First Play.
++ */
++DVDNAV_API dvdnav_status_t dvdnav_title_part_play(
++    dvdnav_t *self, const dvdnav_title_position_t *expected, int32_t part);
++
++/*
++ * Describe authored PTT entries that belong to the supplied presentation PGC.
++ * The current title/title_set/angle must still match expected; pgcn must exist.
++ * Times use the same selected-angle clock as get_current_title_position(), not
++ * a sum of visited programs, and chapter numbers retain their title's authored PTT
++ * identity. Commands do not suppress the chapter table. Success may return an
++ * empty table. Caller owns the allocated table and frees it with free_chapters().
++ * On failure *chapters is NULL and *count is zero. Caller owns disc generation.
++ */
++DVDNAV_API dvdnav_status_t dvdnav_get_current_pgc_chapters(
++    dvdnav_t *self, const dvdnav_title_position_t *expected,
++    dvdnav_chapter_t **chapters, uint32_t *count);
++
++/*
++ * Describe the authored PTT entries reachable in the supplied LINEAR layout.
++ * Times are title-global through that layout. Entries outside the route or
++ * before its entry program are omitted; original PTT numbers are retained.
++ * Same allocation/error contract as get_current_pgc_chapters(). The layout
++ * must belong to this disc; the caller owns disc/session generation identity.
++ */
++DVDNAV_API dvdnav_status_t dvdnav_get_title_chapters(
++    dvdnav_t *self, const dvdnav_title_layout_t *layout,
++    dvdnav_chapter_t **chapters, uint32_t *count);
++
++DVDNAV_API void dvdnav_free_chapters(dvdnav_chapter_t *chapters);
++
++/*
++ * Map a raw current-title-position snapshot's title/PGC and PGC-local clock.
++ * Reject foreign titles/PGCs or times outside the span, without
++ * changing *title_time. The inclusive end admits a held final frame/EOS.
++ */
++DVDNAV_API dvdnav_status_t dvdnav_title_layout_position(
++    const dvdnav_title_layout_t *layout, uint32_t title, uint32_t pgcn,
++    uint64_t pgc_time, uint64_t *title_time);
++
++/*
++ * Map [0, duration) to a span and PGC-local time. At a boundary select the next
++ * nonempty span. Does not change the VM or either output on failure. The caller
++ * enters spans[*span_index].pgcn/entry_program, then uses PGC-based native seek
++ * with *pgc_time. Exact duration is EOF, not a native time-search target.
++ */
++DVDNAV_API dvdnav_status_t dvdnav_title_layout_seek(
++    const dvdnav_title_layout_t *layout, uint64_t title_time,
++    uint32_t *span_index, uint64_t *pgc_time);
++
++/*
++ * Seek within the current title using a matching LINEAR layout and the verified
++ * NAV floor seeker. The title VOB must already be open, with PGC positioning
++ * enabled. Native still/domain/seek restrictions remain in force. A copied VM
++ * enters the target PGC and proves the NAV landing before the live VM is merged.
++ * A read-ahead STOP does not invalidate this retained title/VOB scope. Only the
++ * candidate is resumed until the NAV landing is proven. On failure, live
++ * started/stopped flags, VM identity, hop, position and verified-landing state
++ * remain unchanged. This does not change existing PGC-local time-search APIs.
++ */
++DVDNAV_API dvdnav_status_t dvdnav_title_time_search_floor(
++    dvdnav_t *self, const dvdnav_title_layout_t *layout, uint64_t title_time);
++
++/*
++ * Presentation-synchronized variant of get_next_block(). Before a title cell
++ * command or the end of a PGC advances the VM, return DVDNAV_WAIT and keep the
++ * title VM current. Call dvdnav_wait_skip() only after all previously returned
++ * encoded data is presented, then continue reading. Track selection/readback
++ * and verified time/chapter jumps use the normal APIs while waiting. Plain
++ * cells within a PGC continue without an added wait. Existing read APIs retain
++ * their original behavior. No per-block or retained-VM allocation is required.
++ */
++DVDNAV_API dvdnav_status_t dvdnav_get_next_block_with_wait(
++    dvdnav_t *self, uint8_t *buffer, int32_t *event, int32_t *length);
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -10,6 +10,7 @@
+     'read_cache.c',
+     'searching.c',
+     'settings.c',
++    'title_layout.c',
+     'vm/decoder.c',
+     'vm/getset.c',
+     'vm/play.c',
+--- a/src/dvdnav/meson.build
++++ b/src/dvdnav/meson.build
+@@ -5,6 +5,7 @@
+     'dvdnav.h',
+     'dvdnav_events.h',
+     'dvd_types.h',
++    'title_layout.h',
+ )
+ 
+ dvdnav_api_headers += configure_file(input: 'version.h.in',
+--- a/src/dvdnav.c
++++ b/src/dvdnav.c
+@@ -36,6 +36,7 @@
+ #include <string.h>
+ #include <sys/time.h>
+ #include "dvdnav/dvdnav.h"
++#include "dvdnav/title_layout.h"
+ #include <dvdread/dvd_reader.h>
+ #include <dvdread/nav_types.h>
+ #include "vm/decoder.h"
+@@ -483,6 +484,10 @@
+  * The drawback is the additional memcopy.
+  */
+ 
++static dvdnav_status_t get_next_cache_block(
++    dvdnav_t *self, uint8_t **buffer, int32_t *event, int32_t *length,
++    int wait_before_commands);
++
+ dvdnav_status_t dvdnav_get_next_block(dvdnav_t *this, uint8_t *buf,
+                                       int32_t *event, int32_t *len) {
+   unsigned char *block;
+@@ -494,6 +499,17 @@
+     /* we received a block from the cache, copy it, so we can give it back */
+     memcpy(buf, block, DVD_VIDEO_LB_LEN);
+     dvdnav_free_cache_block(this, block);
++  }
++  return status;
++}
++
++dvdnav_status_t dvdnav_get_next_block_with_wait(
++    dvdnav_t *self, uint8_t *buffer, int32_t *event, int32_t *length) {
++  uint8_t *block = buffer;
++  dvdnav_status_t status = get_next_cache_block(self, &block, event, length, 1);
++  if (status == DVDNAV_STATUS_OK && block != buffer) {
++    memcpy(buffer, block, DVD_VIDEO_LB_LEN);
++    dvdnav_free_cache_block(self, block);
+   }
+   return status;
+ }
+@@ -526,7 +542,64 @@
+          cell->cell_nr == dsi->dsi_gi.vobu_c_idn;
+ }
+ 
+-dvdnav_status_t dvdnav_time_search_floor(dvdnav_t *this, uint64_t time) {
++/* Return the cell selected when the VM enters this angle group. A PGC can
++ * contain fewer angles than the title; match play_Cell's first-cell fallback. */
++static int dvdnav_selected_angle_cell(const pgc_t *pgc, int first, int angle,
++                                     int *end) {
++  const cell_playback_t *cell;
++  int last = first;
++  if (!pgc || !pgc->cell_playback || first < 1 || first > pgc->nr_of_cells ||
++      angle < 1 || angle > 9)
++    return 0;
++  cell = &pgc->cell_playback[first - 1];
++  if (!cell->block_type && !cell->block_mode) {
++    *end = first;
++    return first;
++  }
++  if (cell->block_type != BLOCK_TYPE_ANGLE_BLOCK ||
++      cell->block_mode != BLOCK_MODE_FIRST_CELL)
++    return 0;
++  do {
++    if (++last > pgc->nr_of_cells)
++      return 0;
++    cell = &pgc->cell_playback[last - 1];
++    if (cell->block_type != BLOCK_TYPE_ANGLE_BLOCK ||
++        (cell->block_mode != BLOCK_MODE_IN_BLOCK &&
++         cell->block_mode != BLOCK_MODE_LAST_CELL))
++      return 0;
++  } while (cell->block_mode != BLOCK_MODE_LAST_CELL);
++  *end = last;
++  return angle <= last - first + 1 ? first + angle - 1 : first;
++}
++
++/* A prefix ending inside an angle group is its start, independent of angle.
++ * Commands affect traversal, not this selected-angle PGC coordinate system. */
++dvdnav_status_t dvdnav_pgc_selected_angle_time(
++    const pgc_t *pgc, int angle, uint32_t cell_count, uint64_t *time) {
++  uint64_t total = 0;
++  int first = 1;
++  if (!pgc || !pgc->nr_of_cells || !pgc->cell_playback ||
++      cell_count > pgc->nr_of_cells || angle < 1 || angle > 9 || !time)
++    return DVDNAV_STATUS_ERR;
++  while (first <= (int)cell_count) {
++    int end, selected = dvdnav_selected_angle_cell(pgc, first, angle, &end);
++    int64_t duration;
++    if (!selected)
++      return DVDNAV_STATUS_ERR;
++    if (end > (int)cell_count)
++      break;
++    duration = dvdnav_convert_time(&pgc->cell_playback[selected - 1].playback_time);
++    if (duration < 0 || UINT64_MAX - total < (uint64_t)duration)
++      return DVDNAV_STATUS_ERR;
++    total += (uint64_t)duration;
++    first = end + 1;
++  }
++  *time = total;
++  return DVDNAV_STATUS_OK;
++}
++
++static dvdnav_status_t dvdnav_time_search_floor_internal(
++    dvdnav_t *this, uint64_t time, int selected_angle_clock) {
+   dvdnav_status_t status = DVDNAV_STATUS_ERR;
+   vm_t *copy = NULL;
+   dvdnav_t probe;
+@@ -563,7 +636,22 @@
+     if (cell->block_type == BLOCK_TYPE_ANGLE_BLOCK &&
+         cell->block_mode != BLOCK_MODE_FIRST_CELL)
+       continue;
+-    duration = dvdnav_convert_time(&cell->playback_time);
++    if (selected_angle_clock) {
++      int group_end;
++      int selected = dvdnav_selected_angle_cell(
++          pgc, cell_nr, this->vm->state.AGL_REG, &group_end);
++      if (!selected) {
++        printerr("Invalid angle group during floor time seek.");
++        goto done;
++      }
++      cell = &pgc->cell_playback[selected - 1];
++    }
++    elapsed = dvdnav_convert_time(&cell->playback_time);
++    if (elapsed < 0 || UINT64_MAX - cell_start < (uint64_t)elapsed) {
++      printerr("Invalid cell duration during floor time seek.");
++      goto done;
++    }
++    duration = (uint64_t)elapsed;
+     if (time - cell_start < duration)
+       break;
+     cell_start += duration;
+@@ -765,6 +853,15 @@
+   return status;
+ }
+ 
++dvdnav_status_t dvdnav_time_search_floor(dvdnav_t *this, uint64_t time) {
++  return dvdnav_time_search_floor_internal(this, time, 0);
++}
++
++dvdnav_status_t dvdnav_time_search_floor_selected_angle(
++    dvdnav_t *this, uint64_t time) {
++  return dvdnav_time_search_floor_internal(this, time, 1);
++}
++
+ int64_t dvdnav_get_current_time(dvdnav_t *this) {
+   int i;
+   int64_t tm=0;
+@@ -785,8 +882,28 @@
+   return tm;
+ }
+ 
++/* Mirrors play_Cell_post's angle-group traversal without executing VM commands. */
++static int cell_has_commands_or_ends_pgc(const dvd_state_t *state) {
++  const cell_playback_t *cell = &state->pgc->cell_playback[state->cellN - 1];
++  int next_cell = state->cellN + 1;
++  if (cell->cell_cmd_nr)
++    return 1;
++  if (cell->block_mode && cell->block_type == BLOCK_TYPE_ANGLE_BLOCK) {
++    while (next_cell <= state->pgc->nr_of_cells &&
++           state->pgc->cell_playback[next_cell - 1].block_mode >= BLOCK_MODE_IN_BLOCK)
++      next_cell++;
++  }
++  return next_cell > state->pgc->nr_of_cells;
++}
++
+ dvdnav_status_t dvdnav_get_next_cache_block(dvdnav_t *this, uint8_t **buf,
+                                             int32_t *event, int32_t *len) {
++  return get_next_cache_block(this, buf, event, len, 0);
++}
++
++static dvdnav_status_t get_next_cache_block(
++    dvdnav_t *this, uint8_t **buf, int32_t *event, int32_t *len,
++    int wait_before_commands) {
+   dvd_state_t *state;
+   int32_t result;
+ 
+@@ -1141,6 +1258,17 @@
+ #ifdef LOG_DEBUG
+       Log3(this, "Still set to %x", this->position_next.still);
+ #endif
++      /* Keep the presented title VM current until its encoded data has drained.
++       * The existing WAIT acknowledgement admits this transition exactly once. */
++      if (wait_before_commands && !this->sync_wait_skip &&
++          (!this->position_next.still || this->skip_still) &&
++          state->domain == DVD_DOMAIN_VTSTitle && cell_has_commands_or_ends_pgc(state)) {
++        this->sync_wait = 1;
++        *event = DVDNAV_WAIT;
++        *len = 0;
++        pthread_mutex_unlock(&this->vm_lock);
++        return DVDNAV_STATUS_OK;
++      }
+       this->position_current.still = this->position_next.still;
+ 
+       /* we are about to leave a cell, so a lot of state changes could occur;
+--- a/src/dvdnav_internal.h
++++ b/src/dvdnav_internal.h
+@@ -230,6 +230,13 @@
+ /* converts a dvd_time_t to PTS ticks */
+ DVDNAV_API int64_t dvdnav_convert_time(const dvd_time_t *time);
+ 
++/* Selected-angle coordinates for the title-scope API. Caller owns vm_lock
++ * for the pure PGC helper; the floor seeker takes its own handle's lock. */
++dvdnav_status_t dvdnav_pgc_selected_angle_time(
++    const pgc_t *pgc, int angle, uint32_t cell_count, uint64_t *time);
++dvdnav_status_t dvdnav_time_search_floor_selected_angle(
++    dvdnav_t *self, uint64_t time);
++
+ /** USEFUL MACROS **/
+ 
+ #ifdef __GNUC__

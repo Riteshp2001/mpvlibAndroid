@@ -10,7 +10,7 @@ cd "$REPO_ROOT"
 . buildscripts/include/depinfo.sh
 
 case "$1" in
-	""|-arm64|-x86|-x64) ;;
+	""|-arm64|-x86|-x64|_armv7l|_arm64|_x86|_x86_64) ;;
 	*) echo "Unsupported NDK suffix: $1" >&2; exit 1 ;;
 esac
 

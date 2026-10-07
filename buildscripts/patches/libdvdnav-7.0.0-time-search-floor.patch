@@ -1,0 +1,350 @@
+--- a/src/dvdnav.c
++++ b/src/dvdnav.c
+@@ -65,6 +65,7 @@
+   this->spu_clut_changed = 0;
+   this->started = 0;
+   this->cur_cell_time = 0;
++  this->verified_seek_hop = -1;
+ 
+   dvdnav_read_cache_clear(this->cache);
+   pthread_mutex_unlock(&this->vm_lock);
+@@ -497,6 +498,273 @@
+   return status;
+ }
+ 
++/* Return the first cell of the logical cell containing cell_nr. */
++static int dvdnav_cell_group_start(const pgc_t *pgc, int cell_nr) {
++  while (cell_nr > 1 &&
++         pgc->cell_playback[cell_nr - 1].block_type == BLOCK_TYPE_ANGLE_BLOCK &&
++         pgc->cell_playback[cell_nr - 1].block_mode != BLOCK_MODE_FIRST_CELL)
++    cell_nr--;
++  return cell_nr;
++}
++
++/* Decode both NAV sections before using their time or angle information. */
++static int dvdnav_read_seek_nav(dvdnav_t *this, dvd_file_t *file, int32_t sector,
++                                dsi_t *dsi, pci_t *pci) {
++  uint8_t block[DVD_VIDEO_LB_LEN];
++  if (DVDReadBlocks(file, sector, 1, block) != 1)
++    return 0;
++  memset(dsi, 0, sizeof(*dsi));
++  memset(pci, 0, sizeof(*pci));
++  dsi->dsi_gi.nv_pck_lbn = pci->pci_gi.nv_pck_lbn = UINT32_MAX;
++  return dvdnav_decode_packet(this, block, dsi, pci) &&
++         dsi->dsi_gi.nv_pck_lbn == (uint32_t)sector &&
++         pci->pci_gi.nv_pck_lbn == (uint32_t)sector;
++}
++
++static int dvdnav_seek_cell_matches(const cell_position_t *cell, const dsi_t *dsi) {
++  return cell->vob_id_nr == dsi->dsi_gi.vobu_vob_idn &&
++         cell->cell_nr == dsi->dsi_gi.vobu_c_idn;
++}
++
++dvdnav_status_t dvdnav_time_search_floor(dvdnav_t *this, uint64_t time) {
++  dvdnav_status_t status = DVDNAV_STATUS_ERR;
++  vm_t *copy = NULL;
++  dvdnav_t probe;
++  const cell_playback_t *cell;
++  const pgc_t *pgc;
++  const vobu_admap_t *admap;
++  const cell_position_t *position;
++  dsi_t dsi = {0}, landing_dsi;
++  pci_t pci = {0}, landing_pci;
++  uint64_t cell_start = 0, duration = 0;
++  int64_t elapsed = 0, landing_time = -1;
++  int32_t sector = 0, landing = -1;
++  uint32_t count, visited, first, end, lo, hi;
++  int angle, num_angles;
++  int cell_nr;
++
++  if (!this)
++    return DVDNAV_STATUS_ERR;
++  pthread_mutex_lock(&this->vm_lock);
++  if (this->position_current.still) {
++    printerr("Cannot seek in a still frame.");
++    goto done;
++  }
++  if (!this->started || !this->vm || this->vm->stopped || !this->vm->state.pgc ||
++      !this->pgc_based || this->vm->state.domain != DVD_DOMAIN_VTSTitle ||
++      !this->file || this->position_current.domain != this->vm->state.domain ||
++      this->position_current.vts != this->vm->state.vtsN) {
++    printerr("A title PGC must be open before a floor time seek.");
++    goto done;
++  }
++  pgc = this->vm->state.pgc;
++  for (cell_nr = 1; cell_nr <= pgc->nr_of_cells; cell_nr++) {
++    cell = &pgc->cell_playback[cell_nr - 1];
++    if (cell->block_type == BLOCK_TYPE_ANGLE_BLOCK &&
++        cell->block_mode != BLOCK_MODE_FIRST_CELL)
++      continue;
++    duration = dvdnav_convert_time(&cell->playback_time);
++    if (time - cell_start < duration)
++      break;
++    cell_start += duration;
++  }
++  if (cell_nr > pgc->nr_of_cells) {
++    printerr("Time is outside the current PGC.");
++    goto done;
++  }
++  admap = this->vm->vtsi ? this->vm->vtsi->vts_vobu_admap : NULL;
++  if (!admap || admap->last_byte < VOBU_ADMAP_SIZE - 1) {
++    printerr("No VOBU address map for the current title.");
++    goto done;
++  }
++  count = ((uint64_t)admap->last_byte + 1 - VOBU_ADMAP_SIZE) / sizeof(uint32_t);
++  copy = vm_new_copy(this->vm);
++  if (!copy) {
++    printerr("Could not copy the VM for a floor time seek.");
++    goto done;
++  }
++  if (!vm_jump_cell_block(copy, cell_nr, 0) || copy->stopped || !copy->state.pgc ||
++      copy->state.domain != this->vm->state.domain ||
++      copy->state.vtsN != this->vm->state.vtsN ||
++      copy->state.pgcN != this->vm->state.pgcN ||
++      copy->state.cellN < 1 || copy->state.cellN > copy->state.pgc->nr_of_cells ||
++      dvdnav_cell_group_start(copy->state.pgc, copy->state.cellN) != cell_nr) {
++    printerr("Could not select the target cell and angle.");
++    goto done;
++  }
++  cell = &copy->state.pgc->cell_playback[copy->state.cellN - 1];
++  vm_get_angle_info(copy, &angle, &num_angles);
++  if (angle < 1 || angle > 9) {
++    printerr("Invalid angle during floor time seek.");
++    goto done;
++  }
++  if (cell->first_sector > INT32_MAX || cell->last_sector > INT32_MAX ||
++      cell->first_sector > cell->last_sector) {
++    printerr("Invalid cell sector range.");
++    goto done;
++  }
++  if (!copy->state.pgc->cell_position) {
++    printerr("No cell identity table for a floor time seek.");
++    goto done;
++  }
++  position = &copy->state.pgc->cell_position[copy->state.cellN - 1];
++  if (!position->vob_id_nr || !position->cell_nr) {
++    printerr("Invalid cell identity for a floor time seek.");
++    goto done;
++  }
++  /* Sector ranges can overlap between angles. The VOB/cell identity must
++   * distinguish the angle selected by the VM before an indexed NAV is used. */
++  for (int i = cell_nr; i <= pgc->nr_of_cells; i++) {
++    const cell_playback_t *other = &pgc->cell_playback[i - 1];
++    const cell_position_t *other_position = &pgc->cell_position[i - 1];
++    if (i != cell_nr &&
++        (other->block_type != BLOCK_TYPE_ANGLE_BLOCK ||
++         other->block_mode == BLOCK_MODE_FIRST_CELL))
++      break;
++    if (i != copy->state.cellN &&
++        position->vob_id_nr == other_position->vob_id_nr &&
++        position->cell_nr == other_position->cell_nr) {
++      printerr("Ambiguous angle cell identity for a floor time seek.");
++      goto done;
++    }
++  }
++
++  /* Find and validate the cell's ADMAP span without reading the VOB. The map
++   * supplies addresses only; every candidate's actual NAV time is checked. */
++  first = end = count;
++  for (uint32_t i = 0; i < count; i++) {
++    uint32_t address = admap->vobu_start_sectors[i];
++    if (address < cell->first_sector || address > cell->last_sector)
++      continue;
++    if (first == count)
++      first = i;
++    else if (i != end || address <= admap->vobu_start_sectors[i - 1]) {
++      printerr("Invalid VOBU address map for the target cell.");
++      goto done;
++    }
++    end = i + 1;
++  }
++  if (first == count || admap->vobu_start_sectors[first] != cell->first_sector) {
++    printerr("No first VOBU address for the target cell.");
++    goto done;
++  }
++  memset(&probe, 0, sizeof(probe));
++  probe.vm = copy;
++  probe.priv = this->priv;
++  probe.logcb = this->logcb;
++  /* Establish a real lower anchor before sparse probes. Thus a valid cell
++   * always retains a floor even when physical sector/time order differs. */
++  sector = cell->first_sector;
++  if (!dvdnav_read_seek_nav(&probe, this->file, sector, &dsi, &pci) ||
++      !dvdnav_seek_cell_matches(position, &dsi)) {
++    printerr("Invalid first NAV for the selected cell.");
++    goto done;
++  }
++  elapsed = dvdnav_convert_time(&dsi.dsi_gi.c_eltm);
++  if (elapsed < 0 || (uint64_t)elapsed > time - cell_start) {
++    printerr("No first NAV at or before the requested time.");
++    goto done;
++  }
++  landing = sector;
++  landing_time = elapsed;
++  landing_dsi = dsi;
++  landing_pci = pci;
++  lo = first + 1;
++  hi = end;
++  while (lo < hi && (uint64_t)landing_time != time - cell_start) {
++    uint32_t middle = lo + (hi - lo) / 2;
++    uint32_t candidate = middle + 1;
++    int matched = 0;
++    while (candidate > lo) {
++      candidate--;
++      sector = admap->vobu_start_sectors[candidate];
++      if (!dvdnav_read_seek_nav(&probe, this->file, sector, &dsi, &pci)) {
++        printerr("Invalid NAV packet during floor time seek.");
++        goto done;
++      }
++      if (dvdnav_seek_cell_matches(position, &dsi)) {
++        matched = 1;
++        break;
++      }
++    }
++    if (!matched) {
++      lo = middle + 1;
++      continue;
++    }
++    elapsed = dvdnav_convert_time(&dsi.dsi_gi.c_eltm);
++    if (elapsed < 0 || (uint64_t)elapsed > duration) {
++      printerr("Invalid NAV time during floor time seek.");
++      goto done;
++    }
++    if ((uint64_t)elapsed > time - cell_start) {
++      hi = candidate;
++      continue;
++    }
++    if (elapsed > landing_time) {
++      landing = sector;
++      landing_time = elapsed;
++      landing_dsi = dsi;
++      landing_pci = pci;
++    }
++    if ((uint64_t)elapsed == time - cell_start)
++      break;
++    lo = middle + 1;
++  }
++  /* Validate/refine along the actual playback links from the proven anchor.
++   * Binary search never supplies a landing without the identity/time proof. */
++  for (visited = 0; visited < end - first; visited++) {
++    dvdnav_vobu_t vobu;
++    int64_t next;
++    if ((uint64_t)landing_time == time - cell_start)
++      break;
++    dvdnav_get_vobu(&probe, &landing_dsi, &landing_pci, &vobu);
++    if (vobu.vobu_next == SRI_END_OF_CELL)
++      break;
++    next = (int64_t)landing + vobu.vobu_next;
++    if (next < cell->first_sector || next > cell->last_sector || next == landing) {
++      printerr("Invalid VOBU link during floor time seek.");
++      goto done;
++    }
++    sector = (int32_t)next;
++    if (!dvdnav_read_seek_nav(&probe, this->file, sector, &dsi, &pci) ||
++        !dvdnav_seek_cell_matches(position, &dsi)) {
++      printerr("Invalid linked NAV during floor time seek.");
++      goto done;
++    }
++    elapsed = dvdnav_convert_time(&dsi.dsi_gi.c_eltm);
++    if (elapsed < landing_time || elapsed < 0 || (uint64_t)elapsed > duration) {
++      printerr("Invalid linked NAV time during floor time seek.");
++      goto done;
++    }
++    if ((uint64_t)elapsed > time - cell_start)
++      break;
++    landing = sector;
++    landing_time = elapsed;
++    landing_dsi = dsi;
++    landing_pci = pci;
++  }
++  if (visited == end - first) {
++    printerr("No verified NAV at or before the requested time.");
++    goto done;
++  }
++  /* The copied VM already selected the angle and executed cell-entry state.
++   * Only now commit the proven position. HOP must retain this exact NAV; its
++   * usual multiangle correction is for unverified sector/time interpolation. */
++  copy->state.blockN = landing - cell->first_sector;
++  copy->hop_channel += HOP_SEEK;
++  this->verified_seek_hop = copy->hop_channel;
++  this->verified_seek_angle = copy->state.AGL_REG;
++  vm_merge(this->vm, copy);
++  this->cur_cell_time = landing_time;
++  status = DVDNAV_STATUS_OK;
++
++done:
++  if (copy)
++    vm_free_copy(copy);
++  pthread_mutex_unlock(&this->vm_lock);
++  return status;
++}
++
+ int64_t dvdnav_get_current_time(dvdnav_t *this) {
+   int i;
+   int64_t tm=0;
+@@ -505,7 +773,7 @@
+   if(! state->pgc)
+     return 0;
+ 
+-  for(i=0; i<state->cellN-1; i++) {
++  for(i=0; i<dvdnav_cell_group_start(state->pgc, state->cellN)-1; i++) {
+     if(!
+         (state->pgc->cell_playback[i].block_type == BLOCK_TYPE_ANGLE_BLOCK &&
+          state->pgc->cell_playback[i].block_mode != BLOCK_MODE_FIRST_CELL)
+@@ -571,7 +839,9 @@
+ #ifdef LOG_DEBUG
+     Log3(this->vm, "HOP_CHANNEL");
+ #endif
+-    if (this->position_next.hop_channel - this->position_current.hop_channel >= HOP_SEEK) {
++    if (this->position_next.hop_channel - this->position_current.hop_channel >= HOP_SEEK &&
++        !(this->verified_seek_hop == this->position_next.hop_channel &&
++          this->verified_seek_angle == this->position_next.angle_channel)) {
+       int32_t num_angles = 0, current;
+ 
+       /* we seeked -> check for multiple angles */
+@@ -603,6 +873,7 @@
+         this->vm->state.blockN = this->vobu.vobu_start - this->position_next.cell_start;
+       }
+     }
++    this->verified_seek_hop = -1;
+     this->position_current.hop_channel = this->position_next.hop_channel;
+     /* update VOBU info */
+     this->vobu.vobu_start  = this->position_next.cell_start + this->position_next.block;
+--- a/src/dvdnav_internal.h
++++ b/src/dvdnav_internal.h
+@@ -204,7 +204,11 @@
+   int started;                    /* vm_start has been called? */
+   int use_read_ahead;             /* 1 - use read-ahead cache, 0 - don't */
+   int pgc_based;                  /* positioning works PGC based instead of PG based */
+-  int cur_cell_time;              /* time expired since the beginning of the current cell, read from the dsi */
++  int64_t cur_cell_time;              /* time expired since the beginning of the current cell, read from the dsi */
++
++  /* Seek whose first NAV has already been verified for the selected angle. */
++  int32_t verified_seek_hop;
++  int32_t verified_seek_angle;
+ 
+   /* VM */
+   vm_t *vm;
+--- a/src/dvdnav/dvdnav.h
++++ b/src/dvdnav/dvdnav.h
+@@ -445,6 +445,20 @@
+ DVDNAV_API dvdnav_status_t dvdnav_time_search(dvdnav_t *self,
+                                    uint64_t time);
+ 
++/* Available in this build independently of the upstream version number. */
++#define DVDNAV_HAVE_TIME_SEARCH_FLOOR 1
++
++/* Seek within an open title PGC, in 90 kHz ticks, with PGC positioning enabled.
++ * On success the first delivered NAV, including angle/ILVU and hop processing,
++ * is at or before time. Payload starts with that VOBU. The caller must decode
++ * forward to its target. This does not promise a closed video GOP.
++ * NAV times are checked without changing the live VM. On error its navigation
++ * and read state are unchanged. Targets must be within the PGC duration.
++ * As with dvdnav_time_search(), seeking during a still frame is refused.
++ */
++DVDNAV_API dvdnav_status_t dvdnav_time_search_floor(dvdnav_t *self, uint64_t time);
++
++
+ /*
+  * Find the nearest vobu and jump to it
+  *

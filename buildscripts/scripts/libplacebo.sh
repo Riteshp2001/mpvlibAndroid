@@ -38,6 +38,8 @@ done
 
 ninja -C "$build" -j"$cores"
 DESTDIR="$prefix_dir" ninja -C "$build" install
+"${INSTALL:-install}" -Dm644 LICENSE \
+	"$prefix_dir/share/licenses/libplacebo/LICENSE"
 
 link_libs=()
 for lib in shaderc; do

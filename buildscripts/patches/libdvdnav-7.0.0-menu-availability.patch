@@ -1,0 +1,43 @@
+diff --git a/src/dvdnav/dvdnav.h b/src/dvdnav/dvdnav.h
+--- a/src/dvdnav/dvdnav.h
++++ b/src/dvdnav/dvdnav.h
+@@ -369,6 +369,10 @@
+  */
+ DVDNAV_API dvdnav_status_t dvdnav_menu_call(dvdnav_t *self, DVDMenuID_t menu);
+
++/* Return whether the current VM can enter a root or title menu without
++ * changing playback state. */
++DVDNAV_API dvdnav_status_t dvdnav_menu_available(dvdnav_t *self, DVDMenuID_t menu);
++
+ /*
+  * Return the title number and part currently being played.
+  * A title of 0 indicates we are in a menu. In this case, part
+diff --git a/src/searching.c b/src/searching.c
+--- a/src/searching.c
++++ b/src/searching.c
+@@ -532,6 +532,25 @@
+   return DVDNAV_STATUS_ERR;
+ }
+
++dvdnav_status_t dvdnav_menu_available(dvdnav_t *this, DVDMenuID_t menu) {
++  dvdnav_status_t result = DVDNAV_STATUS_ERR;
++
++  if (menu != DVD_MENU_Root && menu != DVD_MENU_Title)
++    return result;
++
++  pthread_mutex_lock(&this->vm_lock);
++  if (this->vm->state.pgc) {
++    vm_t *try_vm = vm_new_copy(this->vm);
++    if (try_vm) {
++      if (vm_jump_menu(try_vm, menu) && !try_vm->stopped)
++        result = DVDNAV_STATUS_OK;
++      vm_free_copy(try_vm);
++    }
++  }
++  pthread_mutex_unlock(&this->vm_lock);
++  return result;
++}
++
+ dvdnav_status_t dvdnav_get_position(dvdnav_t *this, uint32_t *pos,
+                                     uint32_t *len) {
+   uint32_t cur_sector;

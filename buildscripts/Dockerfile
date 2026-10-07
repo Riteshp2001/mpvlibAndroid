@@ -9,6 +9,8 @@ ENV PATH=${PATH}:${ANDROID_HOME}/tools:${ANDROID_HOME}/tools/bin:${ANDROID_HOME}
 # Install required packages
 RUN apt-get update && apt-get install -y \
     build-essential \
+    ant \
+    patch \
     curl \
     git \
     libtool \

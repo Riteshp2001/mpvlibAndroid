@@ -4,6 +4,135 @@
 #include <jni.h>
 #include <stdlib.h>
 #include <mutex>
+#include <stdint.h>
+#include <string.h>
+
+// JNI string helpers use Modified UTF-8, while libmpv expects standard UTF-8.
+// Reject embedded NUL on input and replace malformed Unicode on output.
+static constexpr uint32_t UNICODE_REPLACEMENT_CHARACTER = 0xFFFD;
+
+static void append_utf8(std::string &utf8, uint32_t code_point)
+{
+    if (code_point <= 0x7F) {
+        utf8.push_back(static_cast<char>(code_point));
+    } else if (code_point <= 0x7FF) {
+        utf8.push_back(static_cast<char>(0xC0 | (code_point >> 6)));
+        utf8.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+    } else if (code_point <= 0xFFFF) {
+        utf8.push_back(static_cast<char>(0xE0 | (code_point >> 12)));
+        utf8.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3F)));
+        utf8.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+    } else {
+        utf8.push_back(static_cast<char>(0xF0 | (code_point >> 18)));
+        utf8.push_back(static_cast<char>(0x80 | ((code_point >> 12) & 0x3F)));
+        utf8.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3F)));
+        utf8.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+    }
+}
+
+bool jstring_to_utf8(JNIEnv *env, jstring value, std::string *utf8)
+{
+    if (!value || !utf8)
+        return false;
+
+    const jchar *chars = env->GetStringChars(value, NULL);
+    if (!chars)
+        return false;
+
+    jsize length = env->GetStringLength(value);
+    utf8->clear();
+    utf8->reserve(static_cast<size_t>(length) * 3);
+    bool has_no_embedded_nul = true;
+    for (jsize i = 0; i < length; i++) {
+        uint32_t code_point = chars[i];
+        if (code_point == 0) {
+            has_no_embedded_nul = false;
+            break;
+        }
+        if (code_point >= 0xD800 && code_point <= 0xDBFF) {
+            if (i + 1 < length && chars[i + 1] >= 0xDC00 && chars[i + 1] <= 0xDFFF) {
+                code_point = 0x10000 + ((code_point - 0xD800) << 10)
+                    + (chars[++i] - 0xDC00);
+            } else {
+                code_point = UNICODE_REPLACEMENT_CHARACTER;
+            }
+        } else if (code_point >= 0xDC00 && code_point <= 0xDFFF) {
+            code_point = UNICODE_REPLACEMENT_CHARACTER;
+        }
+        append_utf8(*utf8, code_point);
+    }
+    env->ReleaseStringChars(value, chars);
+    if (!has_no_embedded_nul)
+        utf8->clear();
+    return has_no_embedded_nul;
+}
+
+static bool is_continuation(unsigned char value)
+{
+    return (value & 0xC0) == 0x80;
+}
+
+jstring utf8_to_jstring(JNIEnv *env, const char *value)
+{
+    if (!value)
+        return NULL;
+
+    const unsigned char *bytes = reinterpret_cast<const unsigned char *>(value);
+    size_t length = strlen(value);
+    std::u16string utf16;
+    utf16.reserve(length);
+    for (size_t i = 0; i < length;) {
+        uint32_t code_point = UNICODE_REPLACEMENT_CHARACTER;
+        size_t consumed = 1;
+        unsigned char first = bytes[i];
+        if (first <= 0x7F) {
+            code_point = first;
+        } else if (first >= 0xC2 && first <= 0xDF && i + 1 < length
+                && is_continuation(bytes[i + 1])) {
+            code_point = ((first & 0x1F) << 6) | (bytes[i + 1] & 0x3F);
+            consumed = 2;
+        } else if (first >= 0xE0 && first <= 0xEF && i + 2 < length
+                && is_continuation(bytes[i + 1]) && is_continuation(bytes[i + 2])) {
+            uint32_t candidate = ((first & 0x0F) << 12)
+                | ((bytes[i + 1] & 0x3F) << 6) | (bytes[i + 2] & 0x3F);
+            if (candidate >= 0x800 && !(candidate >= 0xD800 && candidate <= 0xDFFF)) {
+                code_point = candidate;
+                consumed = 3;
+            }
+        } else if (first >= 0xF0 && first <= 0xF4 && i + 3 < length
+                && is_continuation(bytes[i + 1]) && is_continuation(bytes[i + 2])
+                && is_continuation(bytes[i + 3])) {
+            uint32_t candidate = ((first & 0x07) << 18)
+                | ((bytes[i + 1] & 0x3F) << 12)
+                | ((bytes[i + 2] & 0x3F) << 6) | (bytes[i + 3] & 0x3F);
+            if (candidate >= 0x10000 && candidate <= 0x10FFFF) {
+                code_point = candidate;
+                consumed = 4;
+            }
+        }
+
+        i += consumed;
+        if (code_point <= 0xFFFF) {
+            utf16.push_back(static_cast<char16_t>(code_point));
+        } else {
+            code_point -= 0x10000;
+            utf16.push_back(static_cast<char16_t>(0xD800 + (code_point >> 10)));
+            utf16.push_back(static_cast<char16_t>(0xDC00 + (code_point & 0x3FF)));
+        }
+    }
+
+    return env->NewString(reinterpret_cast<const jchar *>(utf16.data()),
+                          static_cast<jsize>(utf16.size()));
+}
+
+void send_command_reply_to_java(JNIEnv *env, uint64_t request_id, int error,
+                               int64_t result)
+{
+    env->CallStaticVoidMethod(mpv_MPVLib, mpv_MPVLib_eventCommandReply_JiJ,
+                             static_cast<jlong>(request_id),
+                             static_cast<jint>(error),
+                             static_cast<jlong>(result));
+}
 
 bool acquire_jni_env(JavaVM *vm, JNIEnv **env)
 {
@@ -17,75 +146,132 @@ bool acquire_jni_env(JavaVM *vm, JNIEnv **env)
 // Apparently it's considered slow to FindClass and GetMethodID every time we need them,
 // so let's have a nice cache here.
 
-void init_methods_cache(JNIEnv *env)
+static bool cache_global_class(JNIEnv *env, jclass *cached_class, const char *name)
+{
+    if (*cached_class)
+        return true;
+    jclass local_class = env->FindClass(name);
+    if (!local_class)
+        return false;
+    *cached_class = reinterpret_cast<jclass>(env->NewGlobalRef(local_class));
+    env->DeleteLocalRef(local_class);
+    return *cached_class != NULL;
+}
+
+static bool cache_method(JNIEnv *env, jmethodID *cached_method, jclass clazz,
+                        const char *name, const char *signature)
+{
+    if (!*cached_method)
+        *cached_method = env->GetMethodID(clazz, name, signature);
+    return *cached_method != NULL;
+}
+
+static bool cache_static_method(JNIEnv *env, jmethodID *cached_method, jclass clazz,
+                               const char *name, const char *signature)
+{
+    if (!*cached_method)
+        *cached_method = env->GetStaticMethodID(clazz, name, signature);
+    return *cached_method != NULL;
+}
+
+static bool cache_static_field(JNIEnv *env, jfieldID *cached_field, jclass clazz,
+                              const char *name, const char *signature)
+{
+    if (!*cached_field)
+        *cached_field = env->GetStaticFieldID(clazz, name, signature);
+    return *cached_field != NULL;
+}
+
+bool init_methods_cache(JNIEnv *env)
 {
     static std::mutex init_mutex;
     static bool methods_initialized = false;
     std::lock_guard<std::mutex> lock(init_mutex);
     
     if (methods_initialized)
-        return;
+        return true;
 
-    #define FIND_CLASS(name) reinterpret_cast<jclass>(env->NewGlobalRef(env->FindClass(name)))
-    java_Integer = FIND_CLASS("java/lang/Integer");
-    java_Integer_init = env->GetMethodID(java_Integer, "<init>", "(I)V");
-    java_Double = FIND_CLASS("java/lang/Double");
-    java_Double_init = env->GetMethodID(java_Double, "<init>", "(D)V");
-    java_Boolean = FIND_CLASS("java/lang/Boolean");
-    java_Boolean_init = env->GetMethodID(java_Boolean, "<init>", "(Z)V");
+    bool success =
+        cache_global_class(env, &java_Integer, "java/lang/Integer") &&
+        cache_method(env, &java_Integer_init, java_Integer, "<init>", "(I)V") &&
+        cache_global_class(env, &java_Double, "java/lang/Double") &&
+        cache_method(env, &java_Double_init, java_Double, "<init>", "(D)V") &&
+        cache_global_class(env, &java_Boolean, "java/lang/Boolean") &&
+        cache_method(env, &java_Boolean_init, java_Boolean, "<init>", "(Z)V") &&
+        cache_global_class(env, &android_graphics_Bitmap, "android/graphics/Bitmap") &&
+        cache_global_class(env, &android_graphics_Bitmap_Config,
+                           "android/graphics/Bitmap$Config") &&
+        cache_static_method(
+            env, &android_graphics_Bitmap_createBitmap, android_graphics_Bitmap,
+            "createBitmap",
+            "([IIILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;") &&
+        cache_static_method(
+            env, &android_graphics_Bitmap_createBitmapWH, android_graphics_Bitmap,
+            "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;") &&
+        cache_static_field(
+            env, &android_graphics_Bitmap_Config_ARGB_8888, android_graphics_Bitmap_Config,
+            "ARGB_8888", "Landroid/graphics/Bitmap$Config;") &&
+        cache_global_class(env, &mpv_MPVLib, "is/xyz/mpv/MPVLib") &&
+        cache_static_method(env, &mpv_MPVLib_eventProperty_S, mpv_MPVLib,
+                            "eventProperty", "(Ljava/lang/String;)V") &&
+        cache_static_method(env, &mpv_MPVLib_eventProperty_Sb, mpv_MPVLib,
+                            "eventProperty", "(Ljava/lang/String;Z)V") &&
+        cache_static_method(env, &mpv_MPVLib_eventProperty_Sl, mpv_MPVLib,
+                            "eventProperty", "(Ljava/lang/String;J)V") &&
+        cache_static_method(env, &mpv_MPVLib_eventProperty_Sd, mpv_MPVLib,
+                            "eventProperty", "(Ljava/lang/String;D)V") &&
+        cache_static_method(
+            env, &mpv_MPVLib_eventProperty_SS, mpv_MPVLib,
+            "eventProperty", "(Ljava/lang/String;Ljava/lang/String;)V") &&
+        cache_static_method(env, &mpv_MPVLib_event, mpv_MPVLib,
+                            "event", "(ILis/xyz/mpv/MPVNode;)V") &&
+        cache_static_method(env, &mpv_MPVLib_eventProperty_SN, mpv_MPVLib,
+                            "eventProperty", "(Ljava/lang/String;Lis/xyz/mpv/MPVNode;)V") &&
+        cache_static_method(env, &mpv_MPVLib_eventCommandReply_JiJ, mpv_MPVLib,
+                            "eventCommandReply", "(JIJ)V") &&
+        cache_static_method(
+            env, &mpv_MPVLib_eventEndFile_iiS, mpv_MPVLib,
+            "eventEndFile", "(IILjava/lang/String;)V") &&
+        cache_static_method(
+            env, &mpv_MPVLib_logMessage_SiS, mpv_MPVLib,
+            "logMessage", "(Ljava/lang/String;ILjava/lang/String;)V");
+    if (!success)
+        return false;
 
-    android_graphics_Bitmap = FIND_CLASS("android/graphics/Bitmap");
-    // createBitmap(int[], int, int, android.graphics.Bitmap$Config)
-    android_graphics_Bitmap_createBitmap = env->GetStaticMethodID(android_graphics_Bitmap, "createBitmap", "([IIILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
-    // createBitmap(int, int, android.graphics.Bitmap$Config)
-    android_graphics_Bitmap_createBitmapWH = env->GetStaticMethodID(android_graphics_Bitmap, "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
-    android_graphics_Bitmap_Config = FIND_CLASS("android/graphics/Bitmap$Config");
-    // static final android.graphics.Bitmap$Config ARGB_8888
-    android_graphics_Bitmap_Config_ARGB_8888 = env->GetStaticFieldID(android_graphics_Bitmap_Config, "ARGB_8888", "Landroid/graphics/Bitmap$Config;");
-
-    mpv_MPVLib = FIND_CLASS("is/xyz/mpv/MPVLib");
-    mpv_MPVLib_eventProperty_S  = env->GetStaticMethodID(mpv_MPVLib, "eventProperty", "(Ljava/lang/String;)V"); // eventProperty(String)
-    mpv_MPVLib_eventProperty_Sb = env->GetStaticMethodID(mpv_MPVLib, "eventProperty", "(Ljava/lang/String;Z)V"); // eventProperty(String, boolean)
-    mpv_MPVLib_eventProperty_Sl = env->GetStaticMethodID(mpv_MPVLib, "eventProperty", "(Ljava/lang/String;J)V"); // eventProperty(String, long)
-    mpv_MPVLib_eventProperty_Sd = env->GetStaticMethodID(mpv_MPVLib, "eventProperty", "(Ljava/lang/String;D)V"); // eventProperty(String, double)
-    mpv_MPVLib_eventProperty_SS = env->GetStaticMethodID(mpv_MPVLib, "eventProperty", "(Ljava/lang/String;Ljava/lang/String;)V"); // eventProperty(String, String)
-    mpv_MPVLib_eventProperty_SN = env->GetStaticMethodID(mpv_MPVLib, "eventProperty", "(Ljava/lang/String;Lis/xyz/mpv/MPVNode;)V"); // eventProperty(String, MPVNode)
-    mpv_MPVLib_event = env->GetStaticMethodID(mpv_MPVLib, "event", "(ILis/xyz/mpv/MPVNode;)V"); // event(int, MPVNode)
-    mpv_MPVLib_logMessage_SiS = env->GetStaticMethodID(mpv_MPVLib, "logMessage", "(Ljava/lang/String;ILjava/lang/String;)V"); // logMessage(String, int, String)
-
-    // for array node creation, tbh, it might be better to use "List" instead but i wanted consitent naming
-    mpv_MPVNode = FIND_CLASS("is/xyz/mpv/MPVNode");
-
-    mpv_MPVNode_None = FIND_CLASS("is/xyz/mpv/MPVNode$None");
-    mpv_MPVNode_None_INSTANCE = env->GetStaticFieldID(mpv_MPVNode_None, "INSTANCE", "Lis/xyz/mpv/MPVNode$None;");
-
-    mpv_MPVNode_StringNode = FIND_CLASS("is/xyz/mpv/MPVNode$StringNode");
-    mpv_MPVNode_StringNode_init = env->GetMethodID(mpv_MPVNode_StringNode, "<init>", "(Ljava/lang/String;)V");
-
-    mpv_MPVNode_BooleanNode = FIND_CLASS("is/xyz/mpv/MPVNode$BooleanNode");
-    mpv_MPVNode_BooleanNode_init = env->GetMethodID(mpv_MPVNode_BooleanNode, "<init>", "(Z)V");
-
-    mpv_MPVNode_IntNode = FIND_CLASS("is/xyz/mpv/MPVNode$IntNode");
-    mpv_MPVNode_IntNode_init = env->GetMethodID(mpv_MPVNode_IntNode, "<init>", "(J)V");
-
-    mpv_MPVNode_DoubleNode = FIND_CLASS("is/xyz/mpv/MPVNode$DoubleNode");
-    mpv_MPVNode_DoubleNode_init = env->GetMethodID(mpv_MPVNode_DoubleNode, "<init>", "(D)V");
-
-    mpv_MPVNode_ArrayNode = FIND_CLASS("is/xyz/mpv/MPVNode$ArrayNode");
-    mpv_MPVNode_ArrayNode_init = env->GetMethodID(mpv_MPVNode_ArrayNode, "<init>", "([Lis/xyz/mpv/MPVNode;)V");
-
-    mpv_MPVNode_MapNode = FIND_CLASS("is/xyz/mpv/MPVNode$MapNode");
-    mpv_MPVNode_MapNode_init = env->GetMethodID(mpv_MPVNode_MapNode, "<init>", "(Ljava/util/Map;)V");
-
-    java_util_ArrayList = FIND_CLASS("java/util/ArrayList");
-    java_util_ArrayList_init = env->GetMethodID(java_util_ArrayList, "<init>", "()V");
-    java_util_ArrayList_add = env->GetMethodID(java_util_ArrayList, "add", "(Ljava/lang/Object;)Z");
-
-    java_util_HashMap = FIND_CLASS("java/util/HashMap");
-    java_util_HashMap_init = env->GetMethodID(java_util_HashMap, "<init>", "()V");
-    java_util_HashMap_put = env->GetMethodID(java_util_HashMap, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-
-    #undef FIND_CLASS
+    success =
+        cache_global_class(env, &mpv_MPVNode, "is/xyz/mpv/MPVNode") &&
+        cache_global_class(env, &mpv_MPVNode_None, "is/xyz/mpv/MPVNode$None") &&
+        cache_static_field(env, &mpv_MPVNode_None_INSTANCE, mpv_MPVNode_None,
+                           "INSTANCE", "Lis/xyz/mpv/MPVNode$None;") &&
+        cache_global_class(env, &mpv_MPVNode_StringNode, "is/xyz/mpv/MPVNode$StringNode") &&
+        cache_method(env, &mpv_MPVNode_StringNode_init, mpv_MPVNode_StringNode,
+                     "<init>", "(Ljava/lang/String;)V") &&
+        cache_global_class(env, &mpv_MPVNode_BooleanNode, "is/xyz/mpv/MPVNode$BooleanNode") &&
+        cache_method(env, &mpv_MPVNode_BooleanNode_init, mpv_MPVNode_BooleanNode,
+                     "<init>", "(Z)V") &&
+        cache_global_class(env, &mpv_MPVNode_IntNode, "is/xyz/mpv/MPVNode$IntNode") &&
+        cache_method(env, &mpv_MPVNode_IntNode_init, mpv_MPVNode_IntNode,
+                     "<init>", "(J)V") &&
+        cache_global_class(env, &mpv_MPVNode_DoubleNode, "is/xyz/mpv/MPVNode$DoubleNode") &&
+        cache_method(env, &mpv_MPVNode_DoubleNode_init, mpv_MPVNode_DoubleNode,
+                     "<init>", "(D)V") &&
+        cache_global_class(env, &mpv_MPVNode_ArrayNode, "is/xyz/mpv/MPVNode$ArrayNode") &&
+        cache_method(env, &mpv_MPVNode_ArrayNode_init, mpv_MPVNode_ArrayNode,
+                     "<init>", "([Lis/xyz/mpv/MPVNode;)V") &&
+        cache_global_class(env, &mpv_MPVNode_MapNode, "is/xyz/mpv/MPVNode$MapNode") &&
+        cache_method(env, &mpv_MPVNode_MapNode_init, mpv_MPVNode_MapNode,
+                     "<init>", "(Ljava/util/Map;)V") &&
+        cache_global_class(env, &java_util_ArrayList, "java/util/ArrayList") &&
+        cache_method(env, &java_util_ArrayList_init, java_util_ArrayList, "<init>", "()V") &&
+        cache_method(env, &java_util_ArrayList_add, java_util_ArrayList,
+                     "add", "(Ljava/lang/Object;)Z") &&
+        cache_global_class(env, &java_util_HashMap, "java/util/HashMap") &&
+        cache_method(env, &java_util_HashMap_init, java_util_HashMap, "<init>", "()V") &&
+        cache_method(env, &java_util_HashMap_put, java_util_HashMap,
+                     "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+    if (!success)
+        return false;
 
     methods_initialized = true;
+    return true;
 }

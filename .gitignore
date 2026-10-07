@@ -9,4 +9,6 @@ obj
 build
 local.properties
 ndk.properties
+__pycache__/
+*.py[cod]
 *~
