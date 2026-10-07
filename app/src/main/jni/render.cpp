@@ -37,7 +37,9 @@ static void detach_surface(JNIEnv *env, SurfaceTarget target) {
 }
 
 jni_func(void, attachSurface, jobject surface) {
-    update_surface(env, SurfaceTarget::VIDEO, surface, true);
+    // Initial attach must not wait for an async mpv property reply. The
+    // caller/event thread may be responsible for delivering that reply.
+    update_surface(env, SurfaceTarget::VIDEO, surface, false);
 }
 
 jni_func(void, replaceSurface, jobject surface) {
