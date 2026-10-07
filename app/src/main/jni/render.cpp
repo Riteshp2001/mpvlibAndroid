@@ -37,7 +37,7 @@ static void detach_surface(JNIEnv *env, SurfaceTarget target) {
 }
 
 jni_func(void, attachSurface, jobject surface) {
-    update_surface(env, SurfaceTarget::VIDEO, surface, false);
+    update_surface(env, SurfaceTarget::VIDEO, surface, true);
 }
 
 jni_func(void, replaceSurface, jobject surface) {
