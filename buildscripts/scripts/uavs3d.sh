@@ -18,6 +18,14 @@ if [ "$(git rev-parse HEAD)" != "$v_ci_uavs3d" ]; then
 	exit 1
 fi
 
+arch_patch=../../patches/uavs3d-x86-target.patch
+if patch --batch --forward --fuzz=0 --dry-run -p1 < "$arch_patch" >/dev/null 2>&1; then
+	patch --batch --forward --fuzz=0 -p1 < "$arch_patch"
+elif ! patch --batch --reverse --fuzz=0 --dry-run -p1 < "$arch_patch" >/dev/null 2>&1; then
+	echo "uavs3d source does not match $arch_patch." >&2
+	exit 1
+fi
+
 neon_args=()
 [[ "$prefix_name" == armv7l ]] && neon_args=(-DANDROID_ARM_NEON=ON)
 

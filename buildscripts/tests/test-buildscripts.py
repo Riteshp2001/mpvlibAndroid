@@ -199,6 +199,14 @@ class BuildscriptTests(unittest.TestCase):
                 self.copy_source("scripts/" + recipe + ".sh")
                 base = "buildscripts/deps/" + recipe
                 self.write(base + "/" + license_name, "license\n")
+                if recipe == "uavs3d":
+                    self.copy_source("patches/uavs3d-x86-target.patch")
+                    self.write(base + "/source/CMakeLists.txt",
+                               '  endif()\n'
+                               'elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "i386" OR\n'
+                               '       "${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "x86")\n'
+                               '  set(UAVS3D_TARGET_CPU "x86")\n'
+                               'elseif("${CMAKE_SYSTEM_PROCESSOR}" MATCHES "aarch64" OR\n')
                 self.write(base + "/_build_fixture/src/include/libplacebo/config.h",
                            "#define PL_HAVE_OPENGL 1\n#define PL_HAVE_VULKAN 1\n")
                 self.write("buildscripts/prefix/arm64/lib/pkgconfig/" + recipe + ".pc", "Libs:\n")
@@ -210,6 +218,11 @@ class BuildscriptTests(unittest.TestCase):
                 self.assertEqual(target.read_text(), "license\n")
                 if os.name != "nt":
                     self.assertEqual(target.stat().st_mode & 0o777, 0o644)
+                if recipe == "uavs3d":
+                    cmake_source = self.root / base / "source/CMakeLists.txt"
+                    self.assertIn('MATCHES "^i[3-6]86$"', cmake_source.read_text())
+                    result = self.run_shell(command, self.root / base)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_selected_installers(self):
         self.check_installers(selected=True)
