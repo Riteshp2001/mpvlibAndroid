@@ -28,7 +28,8 @@ class BuildscriptTests(unittest.TestCase):
         self.copy_source("include/path.sh")
         self.write("buildscripts/include/depinfo.sh",
                    "v_ndk=fixture\nv_ndk_n=fixture\ndep_failure=()\n"
-                   "dep_mpv_android=()\nv_ci_uavs3d=" + "1" * 40 + "\n")
+                   "dep_mpv_android=()\nv_mujs=1.2.3\nv_mbedtls=3.4.5\n"
+                   "v_ci_uavs3d=" + "1" * 40 + "\n")
 
     def write(self, name, text, executable=False):
         path = self.root / name
@@ -130,6 +131,36 @@ class BuildscriptTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1)
                 self.assertIn("No packaged ABI prefixes were found.", result.stderr)
                 self.assertNotIn("Unsupported NDK suffix", result.stderr)
+
+    def test_mujs_version_metadata(self):
+        self.copy_source("scripts/mujs.sh")
+        base = "buildscripts/deps/mujs"
+        self.write(base + "/mujs.h", "fixture\n")
+        self.tool("fixture-cc", "printf fixture > one.o\n")
+        self.tool("fixture-ar", "printf fixture > libmujs.a\n")
+        self.tool("fixture-ranlib", "exit 0\n")
+        self.environment.pop("v_mujs", None)
+        prefix = self.root / "buildscripts/prefix/arm64"
+        self.environment.update(CC="fixture-cc", AR="fixture-ar",
+                                RANLIB="fixture-ranlib", ndk_suffix="_arm64",
+                                prefix_dir=prefix.as_posix())
+        result = self.run_shell("../../scripts/mujs.sh build", self.root / base)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        metadata = (prefix / "lib/pkgconfig/mujs.pc").read_text()
+        self.assertIn("Version: 1.2.3\n", metadata)
+
+    def test_mbedtls_version_metadata(self):
+        self.copy_source("scripts/mbedtls.sh")
+        base = "buildscripts/deps/mbedtls"
+        self.write(base + "/scripts/config.py", "#!/bin/bash\nexit 0\n", executable=True)
+        self.tool("make", "exit 0\n")
+        self.environment.pop("v_mbedtls", None)
+        prefix = self.root / "buildscripts/prefix/arm64"
+        self.environment.update(prefix_dir=prefix.as_posix(), ndk_triple="aarch64-linux-android")
+        result = self.run_shell("../../scripts/mbedtls.sh build", self.root / base)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        metadata = (prefix / "lib/pkgconfig/mbedtls.pc").read_text()
+        self.assertIn("Version: 3.4.5\n", metadata)
 
     def test_patch_callers(self):
         self.copy_source("include/patch-libbluray.sh")

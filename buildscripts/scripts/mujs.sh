@@ -1,6 +1,7 @@
 #!/bin/bash -e
 
 . ../../include/path.sh
+. ../../include/depinfo.sh
 
 if [ "$1" == "build" ]; then
 	true
