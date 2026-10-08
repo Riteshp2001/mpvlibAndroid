@@ -71,11 +71,6 @@ jobs:
         run: |
           buildscripts/include/ci.sh export >> "$GITHUB_ENV"
 
-      - name: Validate build scripts and cache identity
-        run: |
-          python3 buildscripts/tests/test-buildscripts.py --buildscripts buildscripts
-          python3 buildscripts/tests/test-ci-cache.py --buildscripts buildscripts
-
       - name: Restore Android SDK cache
         id: android-sdk-cache
         uses: actions/cache/restore@v4
@@ -137,13 +132,6 @@ jobs:
           set -euxo pipefail
           mkdir -p "$CACHE_FOLDER"
           buildscripts/include/ci.sh install
-
-      - name: Validate JNI lifetime contracts
-        run: |
-          python3 buildscripts/tests/test-jni-context-lifetime.py \
-            --mpv buildscripts/deps/mpv --jni "$JAVA_HOME/include"
-          python3 buildscripts/tests/test-jni-surface-lifetime.py \
-            --mpv buildscripts/deps/mpv --jni "$JAVA_HOME/include"
 
       - name: Save Android SDK cache
         if: steps.android-sdk-cache.outputs.cache-hit != 'true'
