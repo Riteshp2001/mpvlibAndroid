@@ -192,7 +192,7 @@ if [ ! -d curl ]; then
 fi
 
 # mpv
-[ ! -d mpv ] && git clone https://github.com/mpv-player/mpv
+[ ! -d mpv ] && git clone --branch "$v_mpv_ref" "$v_mpv_repo" mpv
 if ! git -C mpv apply --reverse --check ../../patches/mpv_video_shaders.patch 2>/dev/null; then
 	git -C mpv apply ../../patches/mpv_video_shaders.patch
 fi

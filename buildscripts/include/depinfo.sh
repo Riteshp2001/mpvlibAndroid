@@ -32,6 +32,10 @@ v_libdvdread=7.0.1
 v_libdvdnav=7.0.0
 v_rubberband=4.0.0
 
+# mpv is built from this fork, which carries the frame generation renderer
+v_mpv_repo=https://github.com/Riteshp2001/mpv
+v_mpv_ref=frame-generation
+
 
 ## Dependency tree
 # I would've used a dict but putting arrays in a dict is not a thing
