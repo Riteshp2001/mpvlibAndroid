@@ -24,7 +24,7 @@ export LDFLAGS="-L$prefix_dir/lib ${LDFLAGS:-}"
 meson setup "$build" --cross-file "$prefix_dir"/crossfile.txt \
 	-Dopengl=enabled -Dvulkan=enabled \
 	-Dshaderc=enabled -Dglslang=disabled \
-	-Ddemos=false
+	-Dlcms=enabled -Ddemos=false
 
 config_header="$build/src/include/libplacebo/config.h"
 for backend in OPENGL VULKAN; do
@@ -36,13 +36,19 @@ for backend in OPENGL VULKAN; do
 	}
 done
 
+# The feature must be compiled in, not merely installed in the sysroot.
+grep -Eq '^#define PL_HAVE_LCMS 1([[:space:]]|$)' "$config_header" || {
+	echo "LittleCMS2 support is disabled in libplacebo" >&2
+	exit 1
+}
+
 ninja -C "$build" -j"$cores"
 DESTDIR="$prefix_dir" ninja -C "$build" install
 "${INSTALL:-install}" -Dm644 LICENSE \
 	"$prefix_dir/share/licenses/libplacebo/LICENSE"
 
 link_libs=()
-for lib in shaderc; do
+for lib in shaderc lcms2; do
 	[ -f "$prefix_dir/lib/lib${lib}.a" ] && link_libs+=("-l${lib}")
 done
 link_libs+=("-lc++")
@@ -50,3 +56,9 @@ link_libs+=("-lc++")
 # add missing libraries for static linking
 # this isn't "-lstdc++" due to a meson bug: https://github.com/mesonbuild/meson/issues/11300
 ${SED:-sed} "/^Libs:/ s|$| ${link_libs[*]}|" "$prefix_dir/lib/pkgconfig/libplacebo.pc" -i
+
+# Ensure static LittleCMS2 reaches libmpv through pkg-config's regular Libs.
+pkg-config --libs libplacebo | grep -Fq -- '-llcms2' || {
+	echo "libplacebo pkg-config metadata is missing -llcms2" >&2
+	exit 1
+}

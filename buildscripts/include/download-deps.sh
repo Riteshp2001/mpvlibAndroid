@@ -291,6 +291,11 @@ fi
 # the dependency graph without cloning an extra copy.
 mkdir -p shaderc
 
+# LittleCMS2 for libplacebo ICC color management (official, tagged source).
+if [ ! -d lcms2 ]; then
+	git clone --depth 1 --branch "lcms${v_lcms2}" https://github.com/mm2/Little-CMS.git lcms2
+fi
+
 # libplacebo
 if [ ! -d libplacebo ]; then
 	if [ "$IN_CI" -eq 1 ]; then
