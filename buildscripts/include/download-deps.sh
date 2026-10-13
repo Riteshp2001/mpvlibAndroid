@@ -174,6 +174,11 @@ if [ ! -d openssl ]; then
 		tar -xz -C openssl --strip-components=1
 fi
 
+# LittleCMS2 for libplacebo ICC color management (official, tagged source).
+if [ ! -d lcms2 ]; then
+	git clone --depth 1 --branch "lcms${v_lcms2}" https://github.com/mm2/Little-CMS.git lcms2
+fi
+
 # libplacebo - use GitHub mirror (haasn/libplacebo)
 [ ! -d libplacebo ] && git clone --recursive https://github.com/haasn/libplacebo
 
