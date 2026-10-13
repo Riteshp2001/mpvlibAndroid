@@ -1,6 +1,7 @@
 #!/bin/bash -e
 
 . ../../include/path.sh
+. "$DIR/include/depinfo.sh"
 
 build=_build$ndk_suffix
 
