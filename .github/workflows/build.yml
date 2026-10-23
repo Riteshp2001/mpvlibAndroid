@@ -43,7 +43,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate Semantic Version
         run: |
@@ -51,14 +51,14 @@ jobs:
           echo "VERSION_NAME=$(bash buildscripts/version.sh name)" >> "$GITHUB_ENV"
 
       - name: Setup Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           java-version: "17"
           distribution: temurin
           cache: gradle
 
       - name: Setup Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -68,7 +68,7 @@ jobs:
 
       - name: Restore Android SDK cache
         id: android-sdk-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: buildscripts/sdk/
           key: android-sdk-${{ runner.os }}-${{ hashFiles('buildscripts/include/depinfo.sh', 'buildscripts/include/download-sdk.sh') }}
@@ -77,7 +77,7 @@ jobs:
 
       - name: Restore native prefix cache
         id: native-prefix-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: gh-cache/
           key: native-prefix-${{ runner.os }}-${{ env.CACHE_IDENTIFIER }}
@@ -86,7 +86,7 @@ jobs:
 
       - name: Restore ccache
         id: ccache-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .ccache/
           key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
@@ -128,14 +128,14 @@ jobs:
 
       - name: Save Android SDK cache
         if: steps.android-sdk-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: buildscripts/sdk/
           key: android-sdk-${{ runner.os }}-${{ hashFiles('buildscripts/include/depinfo.sh', 'buildscripts/include/download-sdk.sh') }}
 
       - name: Save native prefix cache
         if: steps.native-prefix-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: gh-cache/
           key: native-prefix-${{ runner.os }}-${{ env.CACHE_IDENTIFIER }}
@@ -169,7 +169,7 @@ jobs:
 
       - name: Save ccache
         if: always() && steps.ccache-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .ccache/
           key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
@@ -191,7 +191,7 @@ jobs:
           cp "$AAR_PATH" "dist/mpvlib-no-vulkan.aar"
 
       - name: Upload AAR artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mpvlib-no-vulkan
           path: dist/mpvlib-no-vulkan.aar

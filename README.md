@@ -141,12 +141,13 @@ Utils.VERSIONS.dependencies.forEach { (name, version) ->
 | libass | latest |
 | dav1d | latest |
 | libmysofa | 1.3.5 |
+| LittleCMS2 | 2.19.1 |
 | Lua | 5.2.4 |
-| MuJS (JavaScript) | 1.3.9 |
-| MbedTLS | 3.6.6 |
-| HarfBuzz | 14.4.0 |
-| FreeType | 2.14.3 |
-| FriBidi | 1.0.16 |
+| MuJS (JavaScript) | 1.3.11 |
+| MbedTLS | 3.6.7 |
+| HarfBuzz | 15.0.0 |
+| FreeType | 2.15.0 |
+| FriBidi | 1.0.17 |
 | libunibreak | 8.0 |
 | Android NDK | r30 |
 | Min API | 24 (Android 7.0) |
