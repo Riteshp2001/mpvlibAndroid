@@ -33,5 +33,10 @@ test -f "$prefix_dir/lib/pkgconfig/lcms2.pc" || {
 	echo "LittleCMS2 pkg-config metadata was not installed" >&2
 	exit 1
 }
-pkg-config --modversion lcms2 | grep -Fx "$v_lcms2"
+# Upstream patch tags can keep the major.minor project version (lcms2.19.1 reports 2.19).
+lcms2_pc_version=$(pkg-config --modversion lcms2)
+[[ "$v_lcms2" == "$lcms2_pc_version" || "$v_lcms2" == "$lcms2_pc_version".* ]] || {
+	echo "LittleCMS2 pkg-config version $lcms2_pc_version does not match $v_lcms2" >&2
+	exit 1
+}
 "${INSTALL:-install}" -Dm644 LICENSE "$prefix_dir/share/licenses/lcms2/LICENSE"
