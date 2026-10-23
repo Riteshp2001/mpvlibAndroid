@@ -50,7 +50,19 @@ if [ ! -f "$av3a_source/CMakeLists.txt" ]; then
 	echo "FFmpeg source does not contain dependency/avs3a. Update the pinned FFmpeg branch." >&2
 	exit 1
 fi
-android_cmake_setup "$av3a_source" "$av3a_build" -DBUILD_SHARED_LIBS=OFF
+# CMake FetchContent clones Eigen from gitlab.com, which intermittently rejects requests under load.
+for attempt in 1 2 3 4 5; do
+	if android_cmake_setup "$av3a_source" "$av3a_build" -DBUILD_SHARED_LIBS=OFF; then
+		break
+	fi
+	if [ "$attempt" -eq 5 ]; then
+		echo "AV3A dependency configure failed after $attempt attempts." >&2
+		exit 1
+	fi
+	echo "AV3A dependency configure failed (attempt $attempt); retrying in $((attempt * 30))s." >&2
+	rm -rf "$av3a_build/_deps"
+	sleep $((attempt * 30))
+done
 android_cmake_build "$av3a_build"
 android_cmake_install "$av3a_build"
 
