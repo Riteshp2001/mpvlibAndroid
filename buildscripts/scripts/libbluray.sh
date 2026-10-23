@@ -15,6 +15,8 @@ fi
 
 unset CC CXX # meson wants these unset
 
+# libbluray 1.4.1 maps aarch64 to the 32-bit Java directory. Android JREs
+# place libjvm.so under lib/aarch64/server.
 if grep -q "java_arch = 'arm'" meson.build; then
 	${SED:-sed} -i.bak "/^elif host_machine.cpu_family() == 'aarch64'$/,/^elif / s/java_arch = 'arm'/java_arch = 'aarch64'/" meson.build
 	rm -f meson.build.bak

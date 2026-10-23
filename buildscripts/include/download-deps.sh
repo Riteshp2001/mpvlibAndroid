@@ -127,16 +127,22 @@ if [ ! -d libaribcaption ]; then
 		tar -xz -C libaribcaption --strip-components=1
 fi
 
+# fontconfig
+if [ ! -d fontconfig ]; then
+	mkdir fontconfig
+	$WGET https://gitlab.freedesktop.org/fontconfig/fontconfig/-/archive/${v_fontconfig}/fontconfig-${v_fontconfig}.tar.gz -O - | \
+		tar -xz -C fontconfig --strip-components=1
+fi
+
 # libbluray
 if [ ! -d libbluray ]; then
 	mkdir libbluray
 	$WGET https://downloads.videolan.org/pub/videolan/libbluray/${v_libbluray}/libbluray-${v_libbluray}.tar.xz -O - | \
 		tar -xJ -C libbluray --strip-components=1
 fi
-
-# libiconv
 ../include/patch-libbluray.sh libbluray
 
+# libiconv
 if [ ! -d libiconv ]; then
 	mkdir libiconv
 	$WGET https://mirrors.ocf.berkeley.edu/gnu/libiconv/libiconv-${v_libiconv}.tar.gz -O - | \

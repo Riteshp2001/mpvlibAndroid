@@ -58,11 +58,12 @@ args=(
 	--target-os=android --enable-cross-compile
 	--cross-prefix=$ndk_triple- --cc=$CC --pkg-config=pkg-config --nm=llvm-nm
 	--pkg-config-flags=--static
+	--ar=$AR --ranlib=$RANLIB
 	--arch=${ndk_triple%%-*} --cpu=$cpu
 	--extra-cflags="-I$prefix_dir/include $cpuflags" --extra-ldflags="-L$prefix_dir/lib"
 
 	--enable-{jni,mediacodec,mbedtls,libdav1d,libxml2,libmysofa,libaribcaption,libarcdav3a,libuavs3d} --disable-vulkan
-	--disable-static --enable-shared --enable-{gpl,version3}
+	--enable-{static,shared,pic,gpl,version3}
 
 	# disable unneeded parts
 	--disable-{stripping,doc,programs}
@@ -81,3 +82,11 @@ args=(
 
 make -j$cores
 make DESTDIR="$prefix_dir" install
+
+# Keep the individual shared builds as the exact public symbol/version reference.
+# Only the aggregate library is installed for mpv and the Media3 consumers.
+pkg-config --libs --static libavdevice libavfilter libavformat libavcodec \
+	libswresample libswscale libavutil > ffmpeg-shared.libs
+python3 ../../../include/ffmpeg-shared.py link --build-dir "$PWD" \
+	--prefix "$prefix_dir" --cxx "$CXX" --ldflags="$LDFLAGS" \
+	--libs-file ffmpeg-shared.libs

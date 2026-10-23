@@ -123,7 +123,7 @@ if [[ "$1" == export || "$1" == install ]]; then
 		exit 1
 	fi
 	prefix_recipe_manifest=$(
-		for recipe in buildall.sh include/*.sh patches/*.patch scripts/*.sh; do
+		for recipe in buildall.sh include/*.sh include/*.py patches/*.patch scripts/*.sh; do
 			case "$recipe" in
 				include/ci.sh|scripts/mpv.sh|scripts/mpv-android.sh) continue ;;
 			esac
