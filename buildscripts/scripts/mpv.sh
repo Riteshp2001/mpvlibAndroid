@@ -47,11 +47,6 @@ if ! git apply --reverse --check ../../patches/mpv_lsfg_layer.patch 2>/dev/null;
 	git apply ../../patches/mpv_lsfg_layer.patch
 fi
 
-if ! git apply --reverse --check ../../patches/mpv_android_atmos.patch 2>/dev/null; then
-	git apply ../../patches/mpv_android_atmos.patch
-fi
-pkg-config --exists openjoc
-
 unset CC CXX # meson wants these unset
 
 check_iconv_files
@@ -77,11 +72,6 @@ meson setup "$build" --cross-file "$prefix_dir"/crossfile.txt \
 
 if ! grep -Eq '^#define HAVE_CLONE 0$' "$build/config.h"; then
 	echo "Android libmpv configured with unsafe HAVE_CLONE; refusing to build." >&2
-	exit 1
-fi
-
-if ! grep -Eq '^#define HAVE_OPENJOC 1$' "$build/config.h"; then
-	echo "OpenJOC classification support was not enabled; refusing to package an incomplete backend." >&2
 	exit 1
 fi
 

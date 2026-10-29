@@ -139,8 +139,7 @@ def verify_package(directory, tool):
     if directory.name not in abis:
         raise ValueError(f"Unsupported native package ABI: {directory.name}")
     elf_class, machine = abis[directory.name]
-    expected = {"libffmpeg.so", "libmpv.so", "libplayer.so", "libc++_shared.so",
-                "libopenjoc_capi.so"}
+    expected = {"libffmpeg.so", "libmpv.so", "libplayer.so", "libc++_shared.so"}
     actual = {path.name for path in directory.glob("*.so")}
     if actual != expected:
         raise ValueError(f"Unexpected native package in {directory}: "

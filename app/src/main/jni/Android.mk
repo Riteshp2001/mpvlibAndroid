@@ -14,11 +14,6 @@ PREFIX = $(PREFIX_X86)
 endif
 
 include $(CLEAR_VARS)
-LOCAL_MODULE := libopenjoc_capi
-LOCAL_SRC_FILES := $(PREFIX)/lib/$(LOCAL_MODULE).so
-include $(PREBUILT_SHARED_LIBRARY)
-
-include $(CLEAR_VARS)
 LOCAL_MODULE := libffmpeg
 LOCAL_SRC_FILES := $(PREFIX)/lib/$(LOCAL_MODULE).so
 LOCAL_EXPORT_C_INCLUDES := $(PREFIX)/include
@@ -47,6 +42,6 @@ LOCAL_SRC_FILES := \
 	node.cpp \
 	thumbnail.cpp
 LOCAL_LDLIBS    := -llog -latomic -ljnigraphics
-LOCAL_SHARED_LIBRARIES := ffmpeg mpv openjoc_capi
+LOCAL_SHARED_LIBRARIES := ffmpeg mpv
 
 include $(BUILD_SHARED_LIBRARY)

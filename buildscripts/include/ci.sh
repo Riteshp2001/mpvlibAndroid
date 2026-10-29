@@ -100,9 +100,6 @@ export WGET="wget --progress=bar:force"
 : "${MPV_GIT_REF:=fongmi}"
 
 if [[ "$1" == export || "$1" == install ]]; then
-	MPV_GIT_COMMIT=$(resolve_ci_commit \
-		"${MPV_GIT_COMMIT:-$v_ci_mpv}" "$MPV_GIT_URL" "$MPV_GIT_REF" mpv)
-	export MPV_GIT_COMMIT
 	FFMPEG_GIT_COMMIT=$(resolve_ci_commit \
 		"${FFMPEG_GIT_COMMIT:-}" "$ffmpeg_repository" "$v_ci_ffmpeg" FFmpeg)
 	DAV1D_GIT_COMMIT=$(resolve_ci_commit \
@@ -156,7 +153,6 @@ if [ "$1" = "export" ]; then
 	echo "DAV1D_GIT_COMMIT=$DAV1D_GIT_COMMIT"
 	echo "LIBASS_GIT_COMMIT=$LIBASS_GIT_COMMIT"
 	echo "LIBPLACEBO_GIT_COMMIT=$LIBPLACEBO_GIT_COMMIT"
-	echo "MPV_GIT_COMMIT=$MPV_GIT_COMMIT"
 	echo "CACHE_IDENTIFIER=$ci_cache_identifier"
 	exit 0
 elif [ "$1" = "install" ]; then
@@ -172,10 +168,11 @@ elif [ "$1" = "install" ]; then
 
 	msg "Fetching mpv"
 	if [ ! -d deps/mpv ]; then
-		git clone --no-checkout "$MPV_GIT_URL" deps/mpv
+		git clone --depth 1 --branch "$MPV_GIT_REF" "$MPV_GIT_URL" deps/mpv
+	else
+		git -C deps/mpv fetch --depth 1 origin "$MPV_GIT_REF"
+		git -C deps/mpv reset --hard FETCH_HEAD
 	fi
-	git -C deps/mpv fetch --depth 1 origin "$MPV_GIT_COMMIT"
-	git -C deps/mpv checkout --detach "$MPV_GIT_COMMIT"
 
 	msg "Trying to fetch existing prefix"
 	mkdir -p prefix
