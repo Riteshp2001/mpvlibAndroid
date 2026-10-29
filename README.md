@@ -54,7 +54,7 @@ the AAR's `assets/openjoc/` directory.
 
 ### 🔒 Security
 - SSL/TLS via MbedTLS
-- CA certificate bundle included
+- Mozilla CA bundle dated 2026-10-20, matching [mpv-android commit 62013d4](https://github.com/mpv-android/mpv-android/commit/62013d44a6d30c26649a07c703c7626e9dd2ea99)
 - Secure streaming by default
 
 ### 🎨 Video Output
