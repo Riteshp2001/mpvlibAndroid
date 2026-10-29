@@ -3,12 +3,12 @@
 . ../../include/path.sh
 . ../../include/depinfo.sh
 
-case "$android_abi" in
-	armeabi-v7a) rust_target=armv7-linux-androideabi ;;
-	arm64-v8a) rust_target=aarch64-linux-android ;;
-	x86) rust_target=i686-linux-android ;;
-	x86_64) rust_target=x86_64-linux-android ;;
-	*) echo "Unsupported Android ABI: $android_abi" >&2; exit 1 ;;
+case "$ndk_triple" in
+	arm-linux-androideabi) rust_target=armv7-linux-androideabi ;;
+	aarch64-linux-android) rust_target=aarch64-linux-android ;;
+	i686-linux-android) rust_target=i686-linux-android ;;
+	x86_64-linux-android) rust_target=x86_64-linux-android ;;
+	*) echo "Unsupported Android toolchain: $ndk_triple" >&2; exit 1 ;;
 esac
 
 case "$1" in
