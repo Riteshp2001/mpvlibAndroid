@@ -145,10 +145,10 @@ index 47eded2..9504d10 100644
  extern const FFCodec ff_amrnb_mediacodec_decoder;
 diff --git a/libavcodec/libopenjocdec.c b/libavcodec/libopenjocdec.c
 new file mode 100644
-index 0000000..66178ad
+index 0000000..2ff4ac6
 --- /dev/null
 +++ b/libavcodec/libopenjocdec.c
-@@ -0,0 +1,507 @@
+@@ -0,0 +1,583 @@
 +/*
 + * OpenJOC E-AC-3 JOC decoder wrapper
 + *
@@ -177,6 +177,15 @@ index 0000000..66178ad
 +#include <string.h>
 +
 +#include <openjoc.h>
++
++#include "config.h"
++
++#if defined(__ANDROID__) && CONFIG_JNI
++#include <android/asset_manager.h>
++#include <android/asset_manager_jni.h>
++#include "ffjni.h"
++#include "jni.h"
++#endif
 +
 +#include "libavutil/avstring.h"
 +#include "libavutil/channel_layout.h"
@@ -328,6 +337,65 @@ index 0000000..66178ad
 +    return ret;
 +}
 +
++#if defined(__ANDROID__) && CONFIG_JNI
++static int libopenjoc_create_android_decoder(AVCodecContext *avctx,
++                                            const openjoc_decoder_config *config)
++{
++    LibOpenJocContext *s = avctx->priv_data;
++    const char *path = s->hrtf_preset == OPENJOC_HRTF_SADIE_D2_KEMAR
++        ? "openjoc/sadie-ii-d2-kemar.ojhrtf" : "openjoc/sadie-ii-d1-ku100.ojhrtf";
++    JNIEnv *env = ff_jni_get_env(avctx);
++    jobject context = av_jni_get_android_app_ctx();
++    jclass context_class = NULL;
++    jobject assets = NULL;
++    AAsset *asset = NULL;
++    int ret = AVERROR_EXTERNAL;
++
++    if (!env || !context) {
++        av_log(avctx, AV_LOG_ERROR, "Android context is unavailable for OpenJOC HRTF loading\n");
++        return ret;
++    }
++    context_class = (*env)->GetObjectClass(env, context);
++    if (ff_jni_exception_check(env, 1, avctx) < 0 || !context_class)
++        goto end;
++    jmethodID get_assets = (*env)->GetMethodID(
++        env, context_class, "getAssets", "()Landroid/content/res/AssetManager;");
++    if (ff_jni_exception_check(env, 1, avctx) < 0 || !get_assets)
++        goto end;
++    assets = (*env)->CallObjectMethod(env, context, get_assets);
++    if (ff_jni_exception_check(env, 1, avctx) < 0 || !assets)
++        goto end;
++    AAssetManager *manager = AAssetManager_fromJava(env, assets);
++    if (ff_jni_exception_check(env, 1, avctx) < 0 || !manager)
++        goto end;
++    asset = AAssetManager_open(manager, path, AASSET_MODE_BUFFER);
++    if (!asset)
++        goto end;
++    off64_t size = AAsset_getLength64(asset);
++    if (size <= 0 || size > 64 * 1024 * 1024) {
++        av_log(avctx, AV_LOG_ERROR, "Invalid OpenJOC HRTF asset size: %"PRId64"\n", (int64_t)size);
++        goto end;
++    }
++    const uint8_t *data = AAsset_getBuffer(asset);
++    if (!data)
++        goto end;
++    openjoc_status status = openjoc_stream_decoder_create_with_hrtf_asset(
++        config, data, (size_t)size, &s->decoder);
++    ret = status == OPENJOC_STATUS_OK ? 0 : libopenjoc_error(avctx, status, "shared HRTF decoder creation");
++
++end:
++    if (asset)
++        AAsset_close(asset);
++    if (assets)
++        (*env)->DeleteLocalRef(env, assets);
++    if (context_class)
++        (*env)->DeleteLocalRef(env, context_class);
++    if (ret < 0)
++        av_log(avctx, AV_LOG_ERROR, "Unable to initialize OpenJOC with packaged asset %s\n", path);
++    return ret;
++}
++#endif
++
 +static av_cold int libopenjoc_init(AVCodecContext *avctx)
 +{
 +    LibOpenJocContext *s = avctx->priv_data;
@@ -372,10 +440,18 @@ index 0000000..66178ad
 +        config.sofa_size = sofa_size;
 +    }
 +
-+    status = openjoc_stream_decoder_create(&config, &s->decoder);
++#if defined(__ANDROID__) && CONFIG_JNI
++    if (s->render_mode == OPENJOC_RENDER_BINAURAL && !sofa_data) {
++        ret = libopenjoc_create_android_decoder(avctx, &config);
++    } else
++#endif
++    {
++        status = openjoc_stream_decoder_create(&config, &s->decoder);
++        ret = status == OPENJOC_STATUS_OK ? 0 : libopenjoc_error(avctx, status, "decoder creation");
++    }
 +    av_file_unmap(sofa_data, sofa_size);
-+    if (status != OPENJOC_STATUS_OK)
-+        return libopenjoc_error(avctx, status, "decoder creation");
++    if (ret < 0)
++        return ret;
 +
 +    status = openjoc_output_info_init(&info);
 +    if (status == OPENJOC_STATUS_OK)

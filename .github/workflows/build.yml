@@ -204,6 +204,7 @@ jobs:
           for notice in LICENSE THIRD_PARTY_NOTICES.md SOURCE.txt; do
             unzip -Z1 "$AAR_PATH" | grep -Fx "assets/openjoc/$notice"
           done
+          python3 buildscripts/verify-openjoc-package.py "$AAR_PATH"
 
       - name: Upload AAR artifact
         uses: actions/upload-artifact@v7

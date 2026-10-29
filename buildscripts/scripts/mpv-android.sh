@@ -42,6 +42,10 @@ for notice in LICENSE THIRD_PARTY_NOTICES.md SOURCE.txt; do
 	install -m 0644 "$notices_prefix/share/openjoc/$notice" "app/src/main/assets/openjoc/$notice"
 done
 
+for model in sadie-ii-d1-ku100.ojhrtf sadie-ii-d2-kemar.ojhrtf MODELS.sha256; do
+	install -m 0644 "$BUILD/prefix/share/openjoc/$model" "app/src/main/assets/openjoc/$model"
+done
+
 chmod +x $BUILD/scripts/write_versions.sh
 $BUILD/scripts/write_versions.sh $ndk_suffix
 
