@@ -329,6 +329,7 @@ jobs:
           fi
 
           cp "$AAR_PATH" "$RELEASE_AAR"
+          unzip -p "$RELEASE_AAR" assets/cacert.pem | cmp - app/src/main/assets/cacert.pem
           (cd dist && sha256sum "${ARTIFACT_BASE}-${VERSION_NAME}.aar" > "${ARTIFACT_BASE}-${VERSION_NAME}.aar.sha256")
 
       - name: Stage versioned FongMi support packages
