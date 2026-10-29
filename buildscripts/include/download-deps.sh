@@ -7,11 +7,6 @@
 
 mkdir -p deps && cd deps
 
-if [ ! -d openjoc ]; then
-	git clone --no-checkout https://github.com/chyinan/OpenJOC.git openjoc
-fi
-git -C openjoc checkout --detach "$v_openjoc_sha"
-
 # mbedtls - use git clone with correct directory structure
 if [ ! -d mbedtls ]; then
 	git clone --depth 1 --branch mbedtls-$v_mbedtls https://github.com/Mbed-TLS/mbedtls.git mbedtls-tmp
@@ -203,8 +198,6 @@ fi
 
 # mpv
 [ ! -d mpv ] && git clone https://github.com/mpv-player/mpv
-git -C mpv fetch --depth 1 origin "$v_ci_mpv"
-git -C mpv checkout --detach "$v_ci_mpv"
 if ! git -C mpv apply --reverse --check ../../patches/mpv_video_shaders.patch 2>/dev/null; then
 	git -C mpv apply ../../patches/mpv_video_shaders.patch
 fi

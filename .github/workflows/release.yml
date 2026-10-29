@@ -245,12 +245,6 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade meson jinja2 jsonschema
 
-      - name: Install pinned Rust toolchain for OpenJOC
-        run: |
-          set -euo pipefail
-          source buildscripts/include/depinfo.sh
-          rustup toolchain install "$v_rust" --profile minimal
-
       - name: Download and restore native dependencies
         run: |
           set -euxo pipefail
@@ -330,7 +324,6 @@ jobs:
 
           cp "$AAR_PATH" "$RELEASE_AAR"
           unzip -p "$RELEASE_AAR" assets/cacert.pem | cmp - app/src/main/assets/cacert.pem
-          python3 buildscripts/verify-openjoc-package.py "$RELEASE_AAR"
           (cd dist && sha256sum "${ARTIFACT_BASE}-${VERSION_NAME}.aar" > "${ARTIFACT_BASE}-${VERSION_NAME}.aar.sha256")
 
       - name: Stage versioned FongMi support packages

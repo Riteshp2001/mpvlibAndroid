@@ -32,10 +32,6 @@ v_libarchive=3.8.10
 v_libdvdread=7.1.1
 v_libdvdnav=7.0.0
 v_rubberband=4.0.0
-v_openjoc=0.20.1
-v_openjoc_sha=e3e330a2000f8d0bced3460756473c8774eb16f0
-v_rust=1.98.0
-v_ci_mpv=dc4b285c93043d99492c3664a24f4ae08cdfdf0d
 
 
 ## Dependency tree
@@ -52,8 +48,7 @@ dep_libxml2=()
 dep_libmysofa=()
 dep_freetype2=()
 dep_libaribcaption=(freetype2)
-dep_openjoc=()
-dep_ffmpeg=(openjoc mbedtls dav1d libxml2 libmysofa libaribcaption)
+dep_ffmpeg=(mbedtls dav1d libxml2 libmysofa libaribcaption)
 dep_fribidi=()
 dep_harfbuzz=()
 dep_unibreak=()
@@ -80,4 +75,4 @@ dep_mpv_android=(mpv)
 v_ci_ffmpeg=n9.0.2
 
 # filename used to uniquely identify a build prefix
-ci_tarball="prefix-ndk-${v_ndk}-lua-${v_lua}-mujs-${v_mujs}-unibreak-${v_unibreak}-harfbuzz-${v_harfbuzz}-fribidi-${v_fribidi}-freetype-${v_freetype}-libxml2-${v_libxml2}-libmysofa-${v_libmysofa}-libaribcaption-${v_libaribcaption}-mbedtls-${v_mbedtls}-curl-${v_curl}-libbluray-${v_libbluray}-libiconv-${v_libiconv}-uchardet-${v_uchardet}-bzip2-${v_bzip2}-xz-${v_xz}-zstd-${v_zstd}-libarchive-${v_libarchive}-libdvdread-${v_libdvdread}-libdvdnav-${v_libdvdnav}-rubberband-${v_rubberband}-openssl-${v_openssl}-ffmpeg-${v_ci_ffmpeg}-lcms2-${v_lcms2}-openjoc-${v_openjoc_sha}-rust-${v_rust}-atmos-v1.tgz"
+ci_tarball="prefix-ndk-${v_ndk}-lua-${v_lua}-mujs-${v_mujs}-unibreak-${v_unibreak}-harfbuzz-${v_harfbuzz}-fribidi-${v_fribidi}-freetype-${v_freetype}-libxml2-${v_libxml2}-libmysofa-${v_libmysofa}-libaribcaption-${v_libaribcaption}-mbedtls-${v_mbedtls}-curl-${v_curl}-libbluray-${v_libbluray}-libiconv-${v_libiconv}-uchardet-${v_uchardet}-bzip2-${v_bzip2}-xz-${v_xz}-zstd-${v_zstd}-libarchive-${v_libarchive}-libdvdread-${v_libdvdread}-libdvdnav-${v_libdvdnav}-rubberband-${v_rubberband}-openssl-${v_openssl}-ffmpeg-${v_ci_ffmpeg}-lcms2-${v_lcms2}.tgz"
