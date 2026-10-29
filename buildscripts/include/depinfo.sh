@@ -33,6 +33,10 @@ v_libarchive=3.8.10
 v_libdvdread=7.0.1
 v_libdvdnav=7.0.0
 v_rubberband=4.0.0
+v_openjoc=0.20.1
+v_openjoc_sha=e3e330a2000f8d0bced3460756473c8774eb16f0
+v_rust=1.98.0
+v_ci_mpv=fe1806b713abc218696f0bc815d5acb14475021e
 
 
 ## Dependency tree
@@ -50,7 +54,8 @@ dep_libmysofa=()
 dep_freetype2=()
 dep_libaribcaption=(freetype2)
 dep_uavs3d=()
-dep_ffmpeg=(mbedtls dav1d libxml2 libmysofa libaribcaption uavs3d)
+dep_openjoc=()
+dep_ffmpeg=(openjoc mbedtls dav1d libxml2 libmysofa libaribcaption uavs3d)
 dep_fontconfig=(libxml2 freetype2)
 dep_fribidi=()
 dep_harfbuzz=()
@@ -80,7 +85,7 @@ v_ci_dav1d=master
 v_ci_libass=master
 v_ci_libplacebo=fongmi
 # Bump when this branch's prefix recipe changes without a version change.
-v_ci_prefix=5
+v_ci_prefix=6
 
 # filename used to uniquely identify a build prefix
 ci_tarball="prefix-fongmi-ndk-${v_ndk}-opengl-vulkan-shaderc-lua-${v_lua}-mujs-${v_mujs}-unibreak-${v_unibreak}-harfbuzz-${v_harfbuzz}-fribidi-${v_fribidi}-freetype-${v_freetype}-libxml2-${v_libxml2}-libmysofa-${v_libmysofa}-libaribcaption-${v_libaribcaption}-fontconfig-${v_fontconfig}-mbedtls-${v_mbedtls}-curl-${v_curl}-libbluray-${v_libbluray}-libiconv-${v_libiconv}-uchardet-${v_uchardet}-bzip2-${v_bzip2}-xz-${v_xz}-zstd-${v_zstd}-libarchive-${v_libarchive}-libdvdread-${v_libdvdread}-libdvdnav-${v_libdvdnav}-rubberband-${v_rubberband}-ffmpeg-${v_ci_ffmpeg}-prefix-${v_ci_prefix}-lcms2-${v_lcms2}.tgz"

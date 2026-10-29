@@ -32,6 +32,10 @@ clone_ci_commit() {
 	fi
 }
 
+if [ ! -d openjoc ]; then
+	clone_ci_commit https://github.com/chyinan/OpenJOC.git "$v_openjoc_sha" openjoc
+fi
+
 # mbedtls
 if [ ! -d mbedtls ]; then
 	mkdir mbedtls

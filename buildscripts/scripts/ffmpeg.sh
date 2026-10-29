@@ -17,6 +17,10 @@ if ! git apply --reverse --check ../../patches/ffmpeg_force_mpegts.patch 2>/dev/
 	git apply ../../patches/ffmpeg_force_mpegts.patch
 fi
 
+if ! git apply --reverse --check ../../patches/ffmpeg_android_atmos.patch 2>/dev/null; then
+	git apply ../../patches/ffmpeg_android_atmos.patch
+fi
+
 mkdir -p _build$ndk_suffix
 cd _build$ndk_suffix
 
@@ -74,7 +78,7 @@ args=(
 	--arch=${ndk_triple%%-*} --cpu=$cpu
 	--extra-cflags="-I$prefix_dir/include $cpuflags" --extra-ldflags="-L$prefix_dir/lib"
 
-	--enable-{jni,mediacodec,mbedtls,libdav1d,libxml2,libmysofa,libaribcaption,libarcdav3a,libuavs3d} --disable-vulkan
+	--enable-{jni,mediacodec,mbedtls,libdav1d,libxml2,libmysofa,libaribcaption,libarcdav3a,libuavs3d,libopenjoc} --disable-vulkan
 	--enable-{static,shared,pic,gpl,version3}
 
 	# disable unneeded parts
@@ -91,6 +95,13 @@ args=(
 	--enable-muxer=mov,matroska,mpegts,spdif
 )
 ../configure "${args[@]}"
+
+for decoder in LIBOPENJOC EAC3_JOC_MEDIACODEC; do
+	if ! grep -Eq "^#define CONFIG_${decoder}_DECODER 1$" config_components.h; then
+		echo "Required Atmos decoder ${decoder} was not enabled." >&2
+		exit 1
+	fi
+done
 
 make -j$cores
 make DESTDIR="$prefix_dir" install

@@ -34,6 +34,12 @@ if [[ -z "$prefix32" && -z "$prefix64" && -z "$prefix_x64" && -z "$prefix_x86" ]
 	exit 255
 fi
 
+notices_prefix=${prefix64:-${prefix32:-${prefix_x64:-$prefix_x86}}}
+mkdir -p app/src/main/assets/openjoc
+for notice in LICENSE THIRD_PARTY_NOTICES.md SOURCE.txt; do
+	install -m 0644 "$notices_prefix/share/openjoc/$notice" "app/src/main/assets/openjoc/$notice"
+done
+
 PREFIX32="$prefix32" PREFIX64="$prefix64" PREFIX_X64="$prefix_x64" PREFIX_X86="$prefix_x86" \
 ndk-build -C app/src/main -j$cores
 
