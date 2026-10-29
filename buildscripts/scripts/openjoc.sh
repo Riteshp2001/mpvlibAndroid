@@ -27,7 +27,7 @@ mkdir -p "$prefix_dir/include" "$prefix_dir/lib/pkgconfig"
 install -m 0644 crates/openjoc-capi/include/openjoc.h "$prefix_dir/include/openjoc.h"
 install -m 0755 "target/$rust_target/release/libopenjoc_capi.so" "$prefix_dir/lib/libopenjoc_capi.so"
 cat >"$prefix_dir/lib/pkgconfig/openjoc.pc" <<EOF
-prefix=$prefix_dir
+prefix=/usr/local
 libdir=\${prefix}/lib
 includedir=\${prefix}/include
 
