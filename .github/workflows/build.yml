@@ -120,6 +120,12 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade meson jinja2 jsonschema
 
+      - name: Install pinned Rust toolchain for OpenJOC
+        run: |
+          set -euo pipefail
+          source buildscripts/include/depinfo.sh
+          rustup toolchain install "$v_rust" --profile minimal
+
       - name: Download and restore native dependencies
         run: |
           set -euxo pipefail
@@ -189,6 +195,15 @@ jobs:
           fi
 
           cp "$AAR_PATH" "dist/mpvlib.aar"
+          source buildscripts/include/build_config.sh
+          abis=(armeabi-v7a arm64-v8a)
+          [ "$ENABLE_X86_ARCH" = "true" ] && abis+=(x86 x86_64)
+          for abi in "${abis[@]}"; do
+            unzip -Z1 "$AAR_PATH" | grep -Fx "jni/$abi/libopenjoc_capi.so"
+          done
+          for notice in LICENSE THIRD_PARTY_NOTICES.md SOURCE.txt; do
+            unzip -Z1 "$AAR_PATH" | grep -Fx "assets/openjoc/$notice"
+          done
 
       - name: Upload AAR artifact
         uses: actions/upload-artifact@v7

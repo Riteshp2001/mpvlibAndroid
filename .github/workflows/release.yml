@@ -245,6 +245,12 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade meson jinja2 jsonschema
 
+      - name: Install pinned Rust toolchain for OpenJOC
+        run: |
+          set -euo pipefail
+          source buildscripts/include/depinfo.sh
+          rustup toolchain install "$v_rust" --profile minimal
+
       - name: Download and restore native dependencies
         run: |
           set -euxo pipefail

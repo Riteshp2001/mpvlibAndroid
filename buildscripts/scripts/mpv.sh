@@ -21,6 +21,10 @@ if ! git apply --reverse --check ../../patches/mpv_android_fdsan_fork.patch 2>/d
 	git apply ../../patches/mpv_android_fdsan_fork.patch
 fi
 
+if ! git apply --reverse --check ../../patches/mpv_android_atmos.patch 2>/dev/null; then
+	git apply ../../patches/mpv_android_atmos.patch
+fi
+
 # Android provides Vulkan, but no pkgconfig file.
 mkdir -p "$prefix_dir"/lib/pkgconfig
 cat >"$prefix_dir"/lib/pkgconfig/vulkan.pc <<END
@@ -80,6 +84,7 @@ fi
 echo "pkg-config check for mujs:"
 pkg-config --libs mujs
 pkg-config --cflags mujs
+pkg-config --exists openjoc
 
 patch_mpv_iconv_dependency
 
@@ -96,6 +101,11 @@ meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
 
 if ! grep -Eq '^#define HAVE_CLONE 0$' "$build/config.h"; then
 	echo "Android libmpv configured with unsafe HAVE_CLONE; refusing to build." >&2
+	exit 1
+fi
+
+if ! grep -Eq '^#define HAVE_OPENJOC 1$' "$build/config.h"; then
+	echo "OpenJOC classification support was not enabled; refusing to package an incomplete backend." >&2
 	exit 1
 fi
 

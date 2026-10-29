@@ -15,6 +15,28 @@ This library brings the full power of mpv to Android — play any video, generat
 - Android Surface rendering with hardware acceleration
 - SOFA HRTF spatial audio through FFmpeg's libmysofa-powered `sofalizer` filter
 
+### E-AC-3 JOC playback (experimental)
+
+Native builds include pinned OpenJOC 0.20.1 and an Android
+`audio/eac3-joc` MediaCodec decoder. Set `audio-atmos-mode` before loading media:
+
+- `no` (default): existing decoder selection, without JOC object rendering.
+- `auto`: positively classify JOC, try the device's JOC decoder, then OpenJOC,
+  then the normal E-AC-3 decoder if initialization fails.
+- `openjoc`: positively classify JOC and use OpenJOC binaural headphone rendering,
+  with normal E-AC-3 initialization fallback.
+
+Ordinary E-AC-3 and other codecs keep their existing decoding. Explicit `ad`
+configuration and compressed passthrough retain priority. Changing the mode
+reinitializes audio through mpv's normal decoder-update mechanism.
+
+OpenJOC is independent, experimental, and not Dolby-certified or guaranteed
+equivalent to Dolby's renderer. This does not add TrueHD object decoding or turn
+ordinary stereo into Atmos. Device decoding depends on an actual Android JOC
+decoder; its availability does not prove that the user enabled a system Dolby
+effect. OpenJOC source, Apache license, and third-party notices are included in
+the AAR's `assets/openjoc/` directory.
+
 ### 🖼️ Thumbnail Generation
 - Two engines: mpv-based and direct FFmpeg
 - Hardware-accelerated with MediaCodec
@@ -84,6 +106,8 @@ FastThumbnails.generate("video.mp4", positionSec = 30.0, width = 320)
 ## Building from Source
 
 ### Prerequisites
+
+Install Rust 1.98.0 with rustup; CI installs this pinned toolchain automatically.
 
 ```bash
 sudo apt install openjdk-17-jdk ninja-build cmake autoconf automake \
