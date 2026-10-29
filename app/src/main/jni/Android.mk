@@ -32,11 +32,6 @@ LOCAL_SRC_FILES := $(PREFIX)/lib/$(LOCAL_MODULE).so
 include $(PREBUILT_SHARED_LIBRARY)
 
 include $(CLEAR_VARS)
-LOCAL_MODULE := libopenjoc_capi
-LOCAL_SRC_FILES := $(PREFIX)/lib/$(LOCAL_MODULE).so
-include $(PREBUILT_SHARED_LIBRARY)
-
-include $(CLEAR_VARS)
 LOCAL_MODULE := libavcodec
 LOCAL_SRC_FILES := $(PREFIX)/lib/$(LOCAL_MODULE).so
 include $(PREBUILT_SHARED_LIBRARY)
@@ -83,6 +78,6 @@ LOCAL_SRC_FILES := \
 	node.cpp \
 	thumbnail.cpp
 LOCAL_LDLIBS    := -llog -lGLESv3 -lEGL -latomic -ljnigraphics
-LOCAL_SHARED_LIBRARIES := swscale avcodec avformat avutil mpv openjoc_capi
+LOCAL_SHARED_LIBRARIES := swscale avcodec avformat avutil mpv
 
 include $(BUILD_SHARED_LIBRARY)
