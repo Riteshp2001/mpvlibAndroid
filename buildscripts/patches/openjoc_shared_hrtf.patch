@@ -1,0 +1,489 @@
+diff --git a/crates/openjoc-api/src/listener_orientation.rs b/crates/openjoc-api/src/listener_orientation.rs
+index d546bb8..472455f 100644
+--- a/crates/openjoc-api/src/listener_orientation.rs
++++ b/crates/openjoc-api/src/listener_orientation.rs
+@@ -259,6 +259,13 @@ impl ListenerOrientationPreparer {
+         Self::new_with_resource_inputs(config, None, None)
+     }
+ 
++    pub fn new_with_hrtf_asset(
++        config: &BinauralConfig,
++        asset: &[u8],
++    ) -> Result<Self, OpenJocError> {
++        Self::new_with_resource_inputs(config, Some(asset), None)
++    }
++
+     /// Confirms that a shared preparation context was built for the exact
+     /// binaural resource/layout configuration supplied to a new session.
+     pub fn validate_config(&self, config: &BinauralConfig) -> Result<(), OpenJocError> {
+diff --git a/crates/openjoc-capi/Cargo.toml b/crates/openjoc-capi/Cargo.toml
+index 1e47fc8..f9f6fa0 100644
+--- a/crates/openjoc-capi/Cargo.toml
++++ b/crates/openjoc-capi/Cargo.toml
+@@ -11,7 +11,7 @@ rust-version.workspace = true
+ crate-type = ["rlib", "staticlib", "cdylib"]
+ 
+ [dependencies]
+-openjoc-api = { version = "0.20.1", path = "../openjoc-api" }
++openjoc-api = { version = "0.20.1", path = "../openjoc-api", default-features = false }
+ openjoc-ffmpeg = { version = "0.20.1", path = "../openjoc-ffmpeg" }
+ openjoc-scene = { version = "0.20.1", path = "../openjoc-scene" }
+ serde_json = "1"
+diff --git a/crates/openjoc-capi/include/openjoc.h b/crates/openjoc-capi/include/openjoc.h
+index de6cce1..f83f6ea 100644
+--- a/crates/openjoc-capi/include/openjoc.h
++++ b/crates/openjoc-capi/include/openjoc.h
+@@ -248,6 +248,9 @@ openjoc_status openjoc_decoder_config_init_v1_4(openjoc_decoder_config *config);
+ openjoc_status openjoc_decoder_config_init_v1_6(openjoc_decoder_config *config);
+ openjoc_status openjoc_decoder_config_init_v1_7(openjoc_decoder_config *config);
+ openjoc_status openjoc_decoder_create(const openjoc_decoder_config *config, openjoc_decoder **output);
++/* Android integration extension. The selected built-in bank is validated
++ * synchronously and the caller may release asset after this returns. */
++openjoc_status openjoc_decoder_create_with_hrtf_asset(const openjoc_decoder_config *config, const uint8_t *asset, size_t asset_size, openjoc_decoder **output);
+ void openjoc_decoder_destroy(openjoc_decoder *decoder);
+ /* PTS is the first sample of this complete AU; OPENJOC_NO_PTS omits it.
+  * The first provided PTS anchors the segment, subtracting previously decoded
+@@ -298,6 +301,9 @@ void openjoc_listener_orientation_retired_destroy(openjoc_listener_orientation_r
+  * staging, positively admits JOC before creating the render session, and
+  * returns PCM in the semantic order advertised by its channel labels. */
+ openjoc_status openjoc_stream_decoder_create(const openjoc_decoder_config *config, openjoc_stream_decoder **output);
++/* Android integration extension. Copies and validates the selected built-in
++ * bank, so the caller may release asset immediately after this returns. */
++openjoc_status openjoc_stream_decoder_create_with_hrtf_asset(const openjoc_decoder_config *config, const uint8_t *asset, size_t asset_size, openjoc_stream_decoder **output);
+ void openjoc_stream_decoder_destroy(openjoc_stream_decoder *decoder);
+ openjoc_status openjoc_stream_decoder_send_chunk(openjoc_stream_decoder *decoder, const uint8_t *data, size_t data_len, int64_t pts_samples, uint32_t flags);
+ openjoc_status openjoc_stream_decoder_receive_frame(openjoc_stream_decoder *decoder, openjoc_pcm_frame *output);
+diff --git a/crates/openjoc-capi/src/lib.rs b/crates/openjoc-capi/src/lib.rs
+index b541d5b..922cd1a 100644
+--- a/crates/openjoc-capi/src/lib.rs
++++ b/crates/openjoc-capi/src/lib.rs
+@@ -40,6 +40,7 @@ pub const OPENJOC_ABI_VERSION_MAJOR: u32 = 1;
+ /// Experimental ABI minor version.
+ pub const OPENJOC_ABI_VERSION_MINOR: u32 = 7;
+ const NO_PTS: i64 = i64::MIN;
++const MAX_EXTERNAL_HRTF_BYTES: usize = 64 * 1024 * 1024;
+ const NO_ORIENTATION_SEQUENCE: u64 = u64::MAX;
+ const LIVE_TEXT_CAPACITY: usize = 512;
+ const LIVE_SHORT_TEXT_CAPACITY: usize = 128;
+@@ -1217,13 +1218,56 @@ pub extern "C" fn openjoc_decoder_config_init_v1_7(
+ pub extern "C" fn openjoc_decoder_create(
+     config: *const openjoc_decoder_config,
+     output: *mut *mut openjoc_decoder,
++) -> openjoc_status {
++    create_decoder(config, None, output)
++}
++
++/// Android integration extension with a synchronously validated external bank.
++#[unsafe(no_mangle)]
++pub extern "C" fn openjoc_decoder_create_with_hrtf_asset(
++    config: *const openjoc_decoder_config,
++    asset: *const u8,
++    asset_size: usize,
++    output: *mut *mut openjoc_decoder,
++) -> openjoc_status {
++    if asset.is_null() || asset_size == 0 || asset_size > MAX_EXTERNAL_HRTF_BYTES {
++        return openjoc_status::OPENJOC_STATUS_INVALID_ARGUMENT;
++    }
++    create_decoder(config, Some((asset, asset_size)), output)
++}
++
++fn create_decoder(
++    config: *const openjoc_decoder_config,
++    asset: Option<(*const u8, usize)>,
++    output: *mut *mut openjoc_decoder,
+ ) -> openjoc_status {
+     if config.is_null() || output.is_null() {
+         return openjoc_status::OPENJOC_STATUS_INVALID_ARGUMENT;
+     }
+     let result = catch_unwind(AssertUnwindSafe(|| {
+         let effective_config = config_from_c(config)?;
+-        let session = if let Some(max_pull_samples) = orientation_pull_samples_from_c(config) {
++        let orientation_pull_samples = orientation_pull_samples_from_c(config);
++        let session = if let Some((data, size)) = asset {
++            let binaural = effective_config.binaural.as_ref().filter(|binaural| {
++                effective_config.render_mode == RenderMode::Binaural && binaural.sofa_bytes.is_empty()
++            }).ok_or_else(|| OpenJocError::InvalidConfig(
++                "an external built-in HRTF requires binaural rendering without a custom SOFA".to_owned(),
++            ))?;
++            // SAFETY: the C caller supplies a readable bank for this call.
++            let bytes = unsafe { slice::from_raw_parts(data, size) };
++            if let Some(max_pull_samples) = orientation_pull_samples {
++                let preparer =
++                    openjoc_api::ListenerOrientationPreparer::new_with_hrtf_asset(binaural, bytes)?;
++                OpenJocSession::new_with_listener_orientation_pull_using_preparer(
++                    effective_config,
++                    max_pull_samples,
++                    0,
++                    preparer,
++                )?
++            } else {
++                OpenJocSession::new_with_hrtf_asset(effective_config, bytes)?
++            }
++        } else if let Some(max_pull_samples) = orientation_pull_samples {
+             OpenJocSession::new_with_listener_orientation_pull(effective_config, max_pull_samples)?
+         } else {
+             OpenJocSession::new(effective_config)?
+@@ -1787,6 +1831,29 @@ pub extern "C" fn openjoc_decoder_get_channel_label(
+ pub extern "C" fn openjoc_stream_decoder_create(
+     config: *const openjoc_decoder_config,
+     output: *mut *mut openjoc_stream_decoder,
++) -> openjoc_status {
++    create_stream_decoder(config, None, output)
++}
++
++/// Android integration extension: copies and validates a caller-supplied built-in
++/// bank. The caller may release its bytes immediately after this call returns.
++#[unsafe(no_mangle)]
++pub extern "C" fn openjoc_stream_decoder_create_with_hrtf_asset(
++    config: *const openjoc_decoder_config,
++    asset: *const u8,
++    asset_size: usize,
++    output: *mut *mut openjoc_stream_decoder,
++) -> openjoc_status {
++    if asset.is_null() || asset_size == 0 || asset_size > MAX_EXTERNAL_HRTF_BYTES {
++        return openjoc_status::OPENJOC_STATUS_INVALID_ARGUMENT;
++    }
++    create_stream_decoder(config, Some((asset, asset_size)), output)
++}
++
++fn create_stream_decoder(
++    config: *const openjoc_decoder_config,
++    asset: Option<(*const u8, usize)>,
++    output: *mut *mut openjoc_stream_decoder,
+ ) -> openjoc_status {
+     if config.is_null() || output.is_null() {
+         return openjoc_status::OPENJOC_STATUS_INVALID_ARGUMENT;
+@@ -1795,7 +1862,11 @@ pub extern "C" fn openjoc_stream_decoder_create(
+         let orientation_pull_samples = orientation_pull_samples_from_c(config);
+         let config = config_from_c(config)
+             .map_err(|error| BridgeError::new(BridgeErrorKind::InvalidConfig, error.to_string()))?;
+-        let mut decoder = if let Some(max_pull_samples) = orientation_pull_samples {
++        let mut decoder = if let Some((data, size)) = asset {
++            // SAFETY: the C caller supplies a readable bank for this call.
++            let bytes = unsafe { slice::from_raw_parts(data, size) };
++            FfmpegDecoder::new_with_hrtf_asset(config, bytes, orientation_pull_samples)?
++        } else if let Some(max_pull_samples) = orientation_pull_samples {
+             FfmpegDecoder::new_with_listener_orientation_pull(config, max_pull_samples)?
+         } else {
+             FfmpegDecoder::new(config)?
+diff --git a/crates/openjoc-capi/tests/shared_hrtf.rs b/crates/openjoc-capi/tests/shared_hrtf.rs
+new file mode 100644
+index 0000000..bc2203f
+--- /dev/null
++++ b/crates/openjoc-capi/tests/shared_hrtf.rs
+@@ -0,0 +1,184 @@
++#![allow(unsafe_code)]
++
++use openjoc_capi::*;
++use std::{fs, mem::MaybeUninit, path::Path, ptr, slice};
++
++fn assert_progress(status: openjoc_status) {
++    assert!(
++        matches!(
++            status,
++            openjoc_status::OPENJOC_STATUS_OK
++                | openjoc_status::OPENJOC_STATUS_FRAME_AVAILABLE
++                | openjoc_status::OPENJOC_STATUS_NEED_MORE_INPUT
++        ),
++        "unexpected decoder progress status: {status:?}"
++    );
++}
++
++fn decoder_config(preset: u32, pull_samples: u32) -> openjoc_decoder_config {
++    let mut output = MaybeUninit::uninit();
++    assert_eq!(
++        openjoc_decoder_config_init_v1_7(output.as_mut_ptr()),
++        openjoc_status::OPENJOC_STATUS_OK
++    );
++    let mut output = unsafe { output.assume_init() };
++    output.render_mode = openjoc_render_mode::OPENJOC_RENDER_BINAURAL as u32;
++    output.hrtf_preset = preset;
++    output.listener_orientation_pull_samples = pull_samples;
++    output
++}
++
++fn collect<T>(
++    decoder: *mut T,
++    receive: extern "C" fn(*mut T, *mut openjoc_pcm_frame) -> openjoc_status,
++) -> Vec<u32> {
++    let mut result = Vec::new();
++    for _ in 0..256 {
++        let mut frame = MaybeUninit::uninit();
++        assert_eq!(
++            openjoc_pcm_frame_init(frame.as_mut_ptr()),
++            openjoc_status::OPENJOC_STATUS_OK
++        );
++        match receive(decoder, frame.as_mut_ptr()) {
++            openjoc_status::OPENJOC_STATUS_FRAME_AVAILABLE => {
++                let frame = unsafe { frame.assume_init() };
++                assert_eq!(
++                    (frame.sample_format, frame.sample_rate, frame.channel_count),
++                    (1, 48_000, 2)
++                );
++                let sample_count = frame.sample_count * frame.channel_count as usize;
++                assert_eq!(frame.data_len, sample_count * size_of::<f32>());
++                let samples = unsafe { slice::from_raw_parts(frame.data, sample_count) };
++                assert!(samples.iter().all(|sample| sample.is_finite()));
++                result.extend(samples.iter().map(|sample| sample.to_bits()));
++            }
++            openjoc_status::OPENJOC_STATUS_NEED_MORE_INPUT
++            | openjoc_status::OPENJOC_STATUS_END_OF_STREAM => return result,
++            other => panic!("unexpected receive status: {other:?}"),
++        }
++    }
++    panic!("decoder exceeded the fixture's bounded frame count");
++}
++
++#[test]
++fn shared_banks_preserve_pcm_ownership_reset_and_pull_rendering() {
++    let banks = [
++        (0, "sadie-ii-d1-ku100.ojhrtf"),
++        (1, "sadie-ii-d2-kemar.ojhrtf"),
++    ];
++    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
++    let fixture = include_bytes!("../../openjoc-wasm/testdata/joc.lifecycle.ec3");
++    for (preset, name) in banks {
++        for pull_samples in [0, 128] {
++            let config = decoder_config(preset, pull_samples);
++            let bank = fs::read(root.join("openjoc-sofa/assets").join(name)).unwrap();
++            let mut raw = ptr::null_mut();
++            let mut stream = ptr::null_mut();
++            assert_eq!(
++                openjoc_decoder_create_with_hrtf_asset(
++                    &config,
++                    bank.as_ptr(),
++                    bank.len(),
++                    &mut raw
++                ),
++                openjoc_status::OPENJOC_STATUS_OK
++            );
++            assert_eq!(
++                openjoc_stream_decoder_create_with_hrtf_asset(
++                    &config,
++                    bank.as_ptr(),
++                    bank.len(),
++                    &mut stream
++                ),
++                openjoc_status::OPENJOC_STATUS_OK
++            );
++            drop(bank);
++            for _ in 0..2 {
++                let mut expected = Vec::new();
++                let mut actual = Vec::new();
++                for (index, packet) in fixture.chunks_exact(4096).take(4).enumerate() {
++                    let pts = index as i64 * 1536;
++                    assert_progress(openjoc_decoder_send_packet(
++                        raw,
++                        packet.as_ptr(),
++                        packet.len(),
++                        pts,
++                        0,
++                    ));
++                    expected.extend(collect(raw, openjoc_decoder_receive_frame));
++                    for (fragment_index, fragment) in packet.chunks(1000).enumerate() {
++                        assert_progress(openjoc_stream_decoder_send_chunk(
++                            stream,
++                            fragment.as_ptr(),
++                            fragment.len(),
++                            if fragment_index == 0 {
++                                pts
++                            } else {
++                                OPENJOC_NO_PTS
++                            },
++                            0,
++                        ));
++                        actual.extend(collect(stream, openjoc_stream_decoder_receive_frame));
++                    }
++                }
++                assert_progress(openjoc_decoder_drain(raw));
++                assert_progress(openjoc_stream_decoder_drain(stream));
++                expected.extend(collect(raw, openjoc_decoder_receive_frame));
++                actual.extend(collect(stream, openjoc_stream_decoder_receive_frame));
++                assert!(!expected.is_empty());
++                assert!(expected.iter().any(|bits| f32::from_bits(*bits) != 0.0));
++                assert_eq!(
++                    actual, expected,
++                    "PCM changed for {name}, pull={pull_samples}"
++                );
++                assert_eq!(
++                    openjoc_decoder_reset(raw),
++                    openjoc_status::OPENJOC_STATUS_OK
++                );
++                assert_eq!(
++                    openjoc_stream_decoder_flush(stream),
++                    openjoc_status::OPENJOC_STATUS_OK
++                );
++            }
++            openjoc_decoder_destroy(raw);
++            openjoc_stream_decoder_destroy(stream);
++        }
++    }
++}
++
++#[test]
++fn shared_banks_fail_explicitly_when_missing_corrupt_or_mismatched() {
++    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
++    let mut bank = fs::read(root.join("openjoc-sofa/assets/sadie-ii-d1-ku100.ojhrtf")).unwrap();
++    let config = decoder_config(0, 0);
++    let mut decoder = ptr::null_mut();
++    assert_ne!(
++        openjoc_stream_decoder_create(&config, &mut decoder),
++        openjoc_status::OPENJOC_STATUS_OK
++    );
++    assert_eq!(
++        openjoc_stream_decoder_create_with_hrtf_asset(&config, ptr::null(), 0, &mut decoder),
++        openjoc_status::OPENJOC_STATUS_INVALID_ARGUMENT
++    );
++    let mismatched = decoder_config(1, 0);
++    assert_ne!(
++        openjoc_stream_decoder_create_with_hrtf_asset(
++            &mismatched,
++            bank.as_ptr(),
++            bank.len(),
++            &mut decoder
++        ),
++        openjoc_status::OPENJOC_STATUS_OK
++    );
++    bank[0] ^= 1;
++    assert_ne!(
++        openjoc_stream_decoder_create_with_hrtf_asset(
++            &config,
++            bank.as_ptr(),
++            bank.len(),
++            &mut decoder
++        ),
++        openjoc_status::OPENJOC_STATUS_OK
++    );
++    assert!(decoder.is_null());
++}
+diff --git a/crates/openjoc-ffmpeg/Cargo.toml b/crates/openjoc-ffmpeg/Cargo.toml
+index b7d6495..5eaabdf 100644
+--- a/crates/openjoc-ffmpeg/Cargo.toml
++++ b/crates/openjoc-ffmpeg/Cargo.toml
+@@ -13,7 +13,7 @@ default = []
+ ffmpeg = ["dep:openjoc-wave"]
+ 
+ [dependencies]
+-openjoc-api = { version = "0.20.1", path = "../openjoc-api" }
++openjoc-api = { version = "0.20.1", path = "../openjoc-api", default-features = false }
+ openjoc-container = { version = "0.20.1", path = "../openjoc-container" }
+ openjoc-eac3 = { version = "0.20.1", path = "../openjoc-eac3" }
+ openjoc-emdf = { version = "0.20.1", path = "../openjoc-emdf" }
+diff --git a/crates/openjoc-ffmpeg/src/lib.rs b/crates/openjoc-ffmpeg/src/lib.rs
+index 4fc7f1f..dc45933 100644
+--- a/crates/openjoc-ffmpeg/src/lib.rs
++++ b/crates/openjoc-ffmpeg/src/lib.rs
+@@ -32,6 +32,7 @@ use std::{
+     collections::VecDeque,
+     fmt,
+     panic::{AssertUnwindSafe, catch_unwind},
++    sync::Arc,
+     time::{Duration, Instant},
+ };
+ 
+@@ -479,6 +480,7 @@ enum PumpResult {
+ /// Reusable, instance-owned external decoder-like wrapper.
+ pub struct FfmpegDecoder {
+     config: OpenJocConfig,
++    builtin_hrtf_asset: Option<Arc<[u8]>>,
+     config_descriptor: String,
+     config_fingerprint: String,
+     latency_samples: usize,
+@@ -522,6 +524,31 @@ impl FfmpegDecoder {
+         Self::with_options(config, TimestampPolicy::PtsOnly, None)
+     }
+ 
++    /// Copies and validates an external built-in bank, retaining it across resets.
++    pub fn new_with_hrtf_asset(
++        config: OpenJocConfig,
++        asset: &[u8],
++        orientation_pull_samples: Option<usize>,
++    ) -> Result<Self, BridgeError> {
++        if config.render_mode != RenderMode::Binaural
++            || config
++                .binaural
++                .as_ref()
++                .is_none_or(|binaural| !binaural.sofa_bytes.is_empty())
++        {
++            return Err(BridgeError::new(
++                BridgeErrorKind::InvalidConfig,
++                "an external built-in HRTF requires binaural rendering without a custom SOFA",
++            ));
++        }
++        Self::with_resource_options(
++            config,
++            TimestampPolicy::PtsOnly,
++            orientation_pull_samples,
++            Some(Arc::from(asset)),
++        )
++    }
++
+     pub fn with_timestamp_policy(
+         config: OpenJocConfig,
+         timestamp_policy: TimestampPolicy,
+@@ -550,6 +577,15 @@ impl FfmpegDecoder {
+         config: OpenJocConfig,
+         timestamp_policy: TimestampPolicy,
+         orientation_pull_samples: Option<usize>,
++    ) -> Result<Self, BridgeError> {
++        Self::with_resource_options(config, timestamp_policy, orientation_pull_samples, None)
++    }
++
++    fn with_resource_options(
++        config: OpenJocConfig,
++        timestamp_policy: TimestampPolicy,
++        orientation_pull_samples: Option<usize>,
++        builtin_hrtf_asset: Option<Arc<[u8]>>,
+     ) -> Result<Self, BridgeError> {
+         config
+             .validate()
+@@ -562,7 +598,12 @@ impl FfmpegDecoder {
+                         "listener-orientation pull requires a binaural configuration",
+                     )
+                 })?;
+-                let preparer = ListenerOrientationPreparer::new(binaural).map_err(|error| {
++                let preparer = if let Some(asset) = builtin_hrtf_asset.as_deref() {
++                    ListenerOrientationPreparer::new_with_hrtf_asset(binaural, asset)
++                } else {
++                    ListenerOrientationPreparer::new(binaural)
++                }
++                .map_err(|error| {
+                     BridgeError::new(BridgeErrorKind::InvalidConfig, error.to_string())
+                 })?;
+                 let preflight = OpenJocSession::new_with_listener_orientation_pull_using_preparer(
+@@ -581,7 +622,12 @@ impl FfmpegDecoder {
+                 (None, Some(preparer), descriptor, fingerprint, latency)
+             } else {
+                 let latency = if config.render_mode == RenderMode::Binaural {
+-                    OpenJocSession::new(config.clone())
++                    let preflight = if let Some(asset) = builtin_hrtf_asset.as_deref() {
++                        OpenJocSession::new_with_hrtf_asset(config.clone(), asset)
++                    } else {
++                        OpenJocSession::new(config.clone())
++                    };
++                    preflight
+                         .map_err(|error| {
+                             BridgeError::new(BridgeErrorKind::InvalidConfig, error.to_string())
+                         })?
+@@ -600,6 +646,7 @@ impl FfmpegDecoder {
+         let layout = channel_layout_for_config(&config)?;
+         Ok(Self {
+             config,
++            builtin_hrtf_asset,
+             config_descriptor,
+             config_fingerprint,
+             latency_samples,
+@@ -1129,7 +1176,12 @@ impl FfmpegDecoder {
+                             BridgeError::new(BridgeErrorKind::InvalidConfig, error.to_string())
+                         })?
+                     } else {
+-                        OpenJocSession::new(self.config.clone()).map_err(|error| {
++                        let session = if let Some(asset) = self.builtin_hrtf_asset.as_deref() {
++                            OpenJocSession::new_with_hrtf_asset(self.config.clone(), asset)
++                        } else {
++                            OpenJocSession::new(self.config.clone())
++                        };
++                        session.map_err(|error| {
+                             BridgeError::new(BridgeErrorKind::InvalidConfig, error.to_string())
+                         })?
+                     };

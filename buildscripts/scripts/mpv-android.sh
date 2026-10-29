@@ -40,6 +40,10 @@ for notice in LICENSE THIRD_PARTY_NOTICES.md SOURCE.txt; do
 	install -m 0644 "$notices_prefix/share/openjoc/$notice" "app/src/main/assets/openjoc/$notice"
 done
 
+for model in sadie-ii-d1-ku100.ojhrtf sadie-ii-d2-kemar.ojhrtf MODELS.sha256; do
+	install -m 0644 "$BUILD/prefix/share/openjoc/$model" "app/src/main/assets/openjoc/$model"
+done
+
 PREFIX32="$prefix32" PREFIX64="$prefix64" PREFIX_X64="$prefix_x64" PREFIX_X86="$prefix_x86" \
 ndk-build -C app/src/main -j$cores
 

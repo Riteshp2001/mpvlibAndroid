@@ -75,6 +75,7 @@ args=(
 	--cross-prefix=$ndk_triple- --cc=$CC --pkg-config=pkg-config --nm=llvm-nm
 	--pkg-config-flags=--static
 	--ar=$AR --ranlib=$RANLIB
+	--extra-libs=-landroid
 	--arch=${ndk_triple%%-*} --cpu=$cpu
 	--extra-cflags="-I$prefix_dir/include $cpuflags" --extra-ldflags="-L$prefix_dir/lib"
 
