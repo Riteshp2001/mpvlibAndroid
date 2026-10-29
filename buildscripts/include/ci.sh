@@ -16,7 +16,8 @@ ci_build_arches=(
 )
 
 ci_arch_tag=$(IFS=-; echo "${ci_build_arches[*]}")
-ci_cache_identifier="${ci_tarball%.tgz}-abi-${ci_arch_tag}.tgz"
+openjoc_recipe_id=$(sha256sum scripts/openjoc.sh patches/ffmpeg_android_atmos.patch | sha256sum | cut -d ' ' -f 1)
+ci_cache_identifier="${ci_tarball%.tgz}-joc-${openjoc_recipe_id}-abi-${ci_arch_tag}.tgz"
 
 msg() {
 	printf '==> %s\n' "$1"
@@ -64,7 +65,7 @@ export WGET="wget --progress=bar:force"
 
 if [ "$1" = "export" ]; then
 	# export variable with unique cache identifier
-	echo "CACHE_IDENTIFIER=$ci_cache_identifier"
+	echo "CACHE_IDENTIFIER=$(printf '%s' "$ci_cache_identifier" | sha256sum | cut -d ' ' -f 1)"
 	exit 0
 elif [ "$1" = "install" ]; then
 	# install deps
@@ -81,9 +82,10 @@ elif [ "$1" = "install" ]; then
 	if [ ! -d deps/mpv ]; then
 		git clone --depth 1 https://github.com/mpv-player/mpv deps/mpv
 	else
-		git -C deps/mpv fetch --depth 1 origin master
-		git -C deps/mpv reset --hard origin/master
+		git -C deps/mpv fetch --depth 1 origin "$v_ci_mpv"
 	fi
+	git -C deps/mpv fetch --depth 1 origin "$v_ci_mpv"
+	git -C deps/mpv checkout --detach "$v_ci_mpv"
 	git -C deps/mpv apply ../../patches/mpv_video_shaders.patch
 
 	msg "Trying to fetch existing prefix"
