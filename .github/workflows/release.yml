@@ -330,6 +330,7 @@ jobs:
 
           cp "$AAR_PATH" "$RELEASE_AAR"
           unzip -p "$RELEASE_AAR" assets/cacert.pem | cmp - app/src/main/assets/cacert.pem
+          python3 buildscripts/verify-openjoc-package.py "$RELEASE_AAR"
           (cd dist && sha256sum "${ARTIFACT_BASE}-${VERSION_NAME}.aar" > "${ARTIFACT_BASE}-${VERSION_NAME}.aar.sha256")
 
       - name: Stage versioned FongMi support packages

@@ -16,7 +16,7 @@ ci_build_arches=(
 )
 
 ci_arch_tag=$(IFS=-; echo "${ci_build_arches[*]}")
-openjoc_recipe_id=$(sha256sum scripts/openjoc.sh patches/ffmpeg_android_atmos.patch | sha256sum | cut -d ' ' -f 1)
+openjoc_recipe_id=$(sha256sum scripts/openjoc.sh patches/ffmpeg_android_atmos.patch patches/openjoc_shared_hrtf.patch | sha256sum | cut -d ' ' -f 1)
 ci_cache_identifier="${ci_tarball%.tgz}-joc-${openjoc_recipe_id}-abi-${ci_arch_tag}.tgz"
 
 msg() {
