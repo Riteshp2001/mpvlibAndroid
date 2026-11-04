@@ -226,6 +226,8 @@ jobs:
             ccache \
             cmake \
             gcc g++ \
+            gcc-multilib \
+            libc6-dev-i386 \
             gettext \
             gperf \
             libtool \

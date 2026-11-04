@@ -22,7 +22,7 @@ This library brings the full power of mpv to Android — play any video, generat
 - ~50-100ms per thumbnail
 
 ### 📜 Scripting
-- **Lua** 5.2.4 — mpv scripts work as-is
+- **LuaJIT** 2.1 — mpv Lua scripts work as-is
 - **JavaScript** via MuJS 1.3.9
 
 ### 🔒 Security
@@ -142,7 +142,7 @@ Utils.VERSIONS.dependencies.forEach { (name, version) ->
 | dav1d | latest |
 | libmysofa | 1.3.5 |
 | LittleCMS2 | 2.19.1 |
-| Lua | 5.2.4 |
+| LuaJIT | 2.1 |
 | MuJS (JavaScript) | 1.3.11 |
 | MbedTLS | 3.6.7 |
 | HarfBuzz | 15.0.0 |
