@@ -9,7 +9,8 @@ v_ndk_n=30.0.16248370
 v_sdk_platform=36
 v_sdk_build_tools=36.0.0
 
-v_lua=5.2.4
+# LuaJIT 2.1 is a rolling release, so pin a commit of its v2.1 branch
+v_luajit=ea9eb7edb5eac4a9d175d74523db34fac0fa5180
 v_lcms2=2.19.1
 v_unibreak=8.0
 v_harfbuzz=15.0.0
@@ -56,7 +57,7 @@ dep_fribidi=()
 dep_harfbuzz=()
 dep_unibreak=()
 dep_libass=(freetype2 fontconfig fribidi harfbuzz unibreak)
-dep_lua=()
+dep_luajit=()
 dep_mujs=()
 dep_shaderc=()
 dep_lcms2=()
@@ -67,7 +68,7 @@ dep_libarchive=(libiconv bzip2 xz zstd)
 dep_libdvdread=()
 dep_libdvdnav=(libdvdread)
 dep_rubberband=()
-dep_mpv=(ffmpeg libass lua libplacebo curl libbluray libiconv uchardet libarchive libdvdnav rubberband mujs)
+dep_mpv=(ffmpeg libass luajit libplacebo curl libbluray libiconv uchardet libarchive libdvdnav rubberband mujs)
 dep_mpv_android=(mpv)
 
 
@@ -83,4 +84,4 @@ v_ci_libplacebo=fongmi
 v_ci_prefix=5
 
 # filename used to uniquely identify a build prefix
-ci_tarball="prefix-fongmi-ndk-${v_ndk}-opengl-vulkan-shaderc-lua-${v_lua}-mujs-${v_mujs}-unibreak-${v_unibreak}-harfbuzz-${v_harfbuzz}-fribidi-${v_fribidi}-freetype-${v_freetype}-libxml2-${v_libxml2}-libmysofa-${v_libmysofa}-libaribcaption-${v_libaribcaption}-fontconfig-${v_fontconfig}-mbedtls-${v_mbedtls}-curl-${v_curl}-libbluray-${v_libbluray}-libiconv-${v_libiconv}-uchardet-${v_uchardet}-bzip2-${v_bzip2}-xz-${v_xz}-zstd-${v_zstd}-libarchive-${v_libarchive}-libdvdread-${v_libdvdread}-libdvdnav-${v_libdvdnav}-rubberband-${v_rubberband}-ffmpeg-${v_ci_ffmpeg}-prefix-${v_ci_prefix}-lcms2-${v_lcms2}.tgz"
+ci_tarball="prefix-fongmi-ndk-${v_ndk}-opengl-vulkan-shaderc-luajit-${v_luajit}-mujs-${v_mujs}-unibreak-${v_unibreak}-harfbuzz-${v_harfbuzz}-fribidi-${v_fribidi}-freetype-${v_freetype}-libxml2-${v_libxml2}-libmysofa-${v_libmysofa}-libaribcaption-${v_libaribcaption}-fontconfig-${v_fontconfig}-mbedtls-${v_mbedtls}-curl-${v_curl}-libbluray-${v_libbluray}-libiconv-${v_libiconv}-uchardet-${v_uchardet}-bzip2-${v_bzip2}-xz-${v_xz}-zstd-${v_zstd}-libarchive-${v_libarchive}-libdvdread-${v_libdvdread}-libdvdnav-${v_libdvdnav}-rubberband-${v_rubberband}-ffmpeg-${v_ci_ffmpeg}-prefix-${v_ci_prefix}-lcms2-${v_lcms2}.tgz"

@@ -11,10 +11,12 @@ if [ "$os" == "linux" ]; then
 	if [ $IN_CI -eq 0 ]; then
 		if hash yum &>/dev/null; then
 			sudo yum install autoconf pkgconfig libtool ninja-build \
-							cmake patch ant unzip wget meson python3 gperf nasm
+							cmake patch ant unzip wget meson python3 gperf nasm \
+							glibc-devel.i686 libgcc.i686
 		elif apt-get -v &>/dev/null; then
 			sudo apt-get install autoconf pkg-config libtool ninja-build \
-							cmake patch ant unzip wget meson python3 gperf nasm
+							cmake patch ant unzip wget meson python3 gperf nasm \
+							gcc-multilib libc6-dev-i386
 			sudo pip3 install --break-system-packages meson
 		else
 			echo "Note: dependencies were not installed, you have to do that manually."

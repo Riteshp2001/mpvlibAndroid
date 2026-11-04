@@ -319,7 +319,7 @@ object Utils {
                 "dav1d" to dav1d,
                 "libmysofa" to libMySofa,
                 "MbedTLS" to mbedTls,
-                "Lua" to lua,
+                "LuaJIT" to lua,
                 "MuJS" to muJs,
                 "FreeType" to freeType,
                 "FriBidi" to friBidi,

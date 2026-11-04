@@ -63,7 +63,8 @@ meson setup "$build" --cross-file "$prefix_dir"/crossfile.txt \
 	--default-library shared \
 	-D{iconv,uchardet}=enabled \
 	-D{libarchive,dvdnav}=enabled \
-	-D{lua,libcurl,rubberband}=enabled \
+	-Dlua=luajit \
+	-D{libcurl,rubberband}=enabled \
 	-Djavascript=enabled \
 	-Dlibmpv=true -Dcplayer=false \
 	-Dlibbluray=enabled \

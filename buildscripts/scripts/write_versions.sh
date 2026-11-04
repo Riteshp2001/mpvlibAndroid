@@ -96,7 +96,7 @@ LIBAVCODEC_VERSION=$(pc_version libavcodec)
 # Read pinned dependencies from installed artifacts as well, preventing retained
 # local source directories from being mislabeled after a configured pin changes.
 MBEDTLS_VERSION=$(pc_version mbedtls)
-LUA_VERSION=$(pc_version lua)
+LUA_VERSION=$(pc_version luajit)
 MUJS_VERSION=$(pc_version mujs)
 FREETYPE_VERSION=$(pc_version freetype2)
 FRIBIDI_VERSION=$(pc_version fribidi)
@@ -117,7 +117,7 @@ require_version libass "$LIBASS_VERSION"
 require_version dav1d "$DAV1D_VERSION"
 require_version libmysofa "$LIBMYSOFA_VERSION"
 require_version MbedTLS "$MBEDTLS_VERSION"
-require_version Lua "$LUA_VERSION"
+require_version LuaJIT "$LUA_VERSION"
 require_version MuJS "$MUJS_VERSION"
 require_version FreeType "$FREETYPE_VERSION"
 require_version FriBidi "$FRIBIDI_VERSION"

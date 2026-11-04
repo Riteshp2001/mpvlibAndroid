@@ -246,7 +246,7 @@ if [ ! -d libass ]; then
 	fi
 fi
 
-# lua
+# luajit
 check_sha256() {
 	local digest
 	if command -v sha256sum >/dev/null; then
@@ -257,33 +257,33 @@ check_sha256() {
 	[[ ${digest%% *} == "$2" ]]
 }
 
-download_lua() {
-	local archive=lua-$v_lua.tar.gz
-	local checksum=b9e2e4aad6789b3b63a056d442f7b39f0ecfca3ae0f1fc0ae4e9614401b69f4b
+download_luajit() {
+	local archive=luajit-$v_luajit.tar.gz
+	local checksum=338a5640be00b89fd0a2a027a7433fcbbb4d006be840d216d84151386b5bcdf7
 	local url
 
 	for url in \
-		"https://www.lua.org/ftp/$archive" \
-		"https://mirror.bazel.build/www.lua.org/ftp/$archive"
+		"https://github.com/LuaJIT/LuaJIT/archive/$v_luajit.tar.gz" \
+		"https://codeload.github.com/LuaJIT/LuaJIT/tar.gz/$v_luajit"
 	do
 		rm -f "$archive"
 		if $WGET "$url" -O "$archive" && check_sha256 "$archive" "$checksum"
 		then
-			rm -rf lua
-			mkdir lua
-			if tar -xz -C lua --strip-components=1 -f "$archive"; then
+			rm -rf luajit
+			mkdir luajit
+			if tar -xz -C luajit --strip-components=1 -f "$archive"; then
 				rm "$archive"
 				return 0
 			fi
 		fi
 	done
 
-	rm -rf lua "$archive"
+	rm -rf luajit "$archive"
 	return 1
 }
 
-if [ ! -f lua/src/lua.h ]; then
-	download_lua
+if [ ! -f luajit/src/lua.h ]; then
+	download_luajit
 fi
 
 # mujs

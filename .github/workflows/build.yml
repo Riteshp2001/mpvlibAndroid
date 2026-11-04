@@ -109,6 +109,8 @@ jobs:
             build-essential \
             ccache \
             gcc g++ \
+            gcc-multilib \
+            libc6-dev-i386 \
             cmake \
             gettext \
             gperf \
