@@ -31,6 +31,9 @@ abstract class BaseMPVView(context: Context, attrs: AttributeSet) : SurfaceView(
         for (opt in arrayOf("gpu-shader-cache-dir", "icc-cache-dir")) {
             MPVLib.setOptionString(opt, cacheDir)
         }
+        // As in mpv-android: show HLS renditions and MPEG-TS programs as one track list instead
+        // of editions, which nothing here can switch. Set first so initOptions() can override it.
+        MPVLib.setOptionString("flatten-editions", "yes")
         initOptions()
 
         MPVLib.init()
