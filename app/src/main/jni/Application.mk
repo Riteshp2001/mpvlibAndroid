@@ -15,3 +15,7 @@ endif
 APP_PLATFORM := android-24
 APP_STL := c++_shared
 APP_SUPPORT_FLEXIBLE_PAGE_SIZES := true
+
+# This is a library distribution, not the final APK. Preserve symbol tables for
+# the consuming app's ndk.debugSymbolLevel extraction and final stripping.
+APP_STRIP_MODE := none
