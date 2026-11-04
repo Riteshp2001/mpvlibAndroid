@@ -153,11 +153,11 @@ fi
 # libass - use GitHub mirror
 [ ! -d libass ] && git clone https://github.com/libass/libass
 
-# lua - use 5.2.x (mpv requires < 5.3)
-if [ ! -d lua ]; then
-	mkdir lua
-	$WGET https://www.lua.org/ftp/lua-$v_lua.tar.gz -O - | \
-		tar -xz -C lua --strip-components=1
+# luajit
+if [ ! -d luajit ]; then
+	mkdir luajit
+	$WGET https://github.com/LuaJIT/LuaJIT/archive/$v_luajit.tar.gz -O - | \
+		tar -xz -C luajit --strip-components=1
 fi
 
 # mujs
