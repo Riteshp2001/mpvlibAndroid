@@ -428,7 +428,7 @@ jobs:
             echo ""
             echo "## FongMi support packages"
             echo ""
-            echo "- \`mpvlib-fongmi-renderer-sdk-${VERSION_NAME}.zip\`: ARMv7/ARM64 libplacebo headers, static libraries and provenance."
+            echo "- \`mpvlib-fongmi-renderer-sdk-${VERSION_NAME}.zip\`: ARMv7/ARM64 libplacebo and mpv GPU motion core headers, static libraries and provenance."
             echo "- \`libbluray-bdj-${VERSION_NAME}.zip\`: matching BD-J jars and ARMv7/ARM64 native build inputs."
             echo ""
             echo "Support packages are optional native integration inputs, not additional AAR dependencies. BD-J requires a compatible Java runtime integration."

@@ -3,18 +3,20 @@
 ## Dependency versions
 # Make sure to keep v_ndk and v_ndk_n in sync, both are listed on the NDK download page
 
-v_sdk=14742923_latest
+v_sdk=16111833_latest
 v_ndk=r30
 v_ndk_n=30.0.16248370
 v_sdk_platform=36
-v_sdk_build_tools=36.0.0
+v_sdk_build_tools=37.0.0
 
 # LuaJIT 2.1 is a rolling release, so pin a commit of its v2.1 branch
 v_luajit=ea9eb7edb5eac4a9d175d74523db34fac0fa5180
-v_lcms2=2.19.1
+v_lcms2=2.20
+# mpv release built by the library and no-vulkan variants (FongMi builds its own fork)
+v_mpv=0.42.0
 v_unibreak=8.0
-v_harfbuzz=15.0.0
-v_fribidi=1.0.17
+v_harfbuzz=15.1.0
+v_fribidi=1.0.18
 v_freetype=2.15.0
 v_mbedtls=3.6.7
 v_openssl=3.6.5
@@ -24,12 +26,12 @@ v_libmysofa=1.3.5
 v_libaribcaption=1.1.2
 v_curl=8.23.0
 v_libbluray=1.5.0
-v_libiconv=1.19
+v_libiconv=1.19.1
 v_uchardet=0.0.8
 v_bzip2=1.0.8
 v_xz=5.8.4
 v_zstd=1.5.7
-v_libarchive=3.8.10
+v_libarchive=3.8.11
 v_libdvdread=7.1.1
 v_libdvdnav=7.0.0
 v_rubberband=4.0.0
