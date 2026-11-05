@@ -134,20 +134,20 @@ Utils.VERSIONS.dependencies.forEach { (name, version) ->
 
 | Component | Version |
 |-----------|---------|
-| mpv | latest |
+| mpv | 0.42.0 |
 | FFmpeg | n9.0.2 |
 | libplacebo | latest |
 | shaderc | disabled |
 | libass | latest |
 | dav1d | latest |
 | libmysofa | 1.3.5 |
-| LittleCMS2 | 2.19.1 |
+| LittleCMS2 | 2.20 |
 | LuaJIT | 2.1 |
 | MuJS (JavaScript) | 1.3.11 |
 | MbedTLS | 3.6.7 |
-| HarfBuzz | 15.0.0 |
+| HarfBuzz | 15.1.0 |
 | FreeType | 2.15.0 |
-| FriBidi | 1.0.17 |
+| FriBidi | 1.0.18 |
 | libunibreak | 8.0 |
 | Android NDK | r30 |
 | Min API | 24 (Android 7.0) |

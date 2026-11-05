@@ -79,10 +79,10 @@ elif [ "$1" = "install" ]; then
 
 	msg "Fetching mpv"
 	if [ ! -d deps/mpv ]; then
-		git clone --depth 1 https://github.com/mpv-player/mpv deps/mpv
+		git clone --depth 1 --branch "v$v_mpv" https://github.com/mpv-player/mpv deps/mpv
 	else
-		git -C deps/mpv fetch --depth 1 origin master
-		git -C deps/mpv reset --hard origin/master
+		git -C deps/mpv fetch --depth 1 origin "refs/tags/v$v_mpv:refs/tags/v$v_mpv"
+		git -C deps/mpv reset --hard "v$v_mpv"
 	fi
 	git -C deps/mpv apply ../../patches/mpv_video_shaders.patch
 
