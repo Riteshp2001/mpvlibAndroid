@@ -3,18 +3,18 @@
 ## Dependency versions
 # Make sure to keep v_ndk and v_ndk_n in sync, both are listed on the NDK download page
 
-v_sdk=14742923_latest
+v_sdk=16111833_latest
 v_ndk=r30
 v_ndk_n=30.0.16248370
 v_sdk_platform=36
-v_sdk_build_tools=36.0.0
+v_sdk_build_tools=37.0.0
 
 # LuaJIT 2.1 is a rolling release, so pin a commit of its v2.1 branch
 v_luajit=ea9eb7edb5eac4a9d175d74523db34fac0fa5180
-v_lcms2=2.19.1
+v_lcms2=2.20
 v_unibreak=8.0
-v_harfbuzz=15.0.0
-v_fribidi=1.0.17
+v_harfbuzz=15.1.0
+v_fribidi=1.0.18
 v_freetype=2.15.0
 v_mbedtls=3.6.7
 v_mujs=1.3.11
@@ -25,12 +25,12 @@ v_fontconfig=2.18.3
 v_curl=8.23.0
 # libbluray, libdvdread and libdvdnav stay pinned: the bundled patches target these exact releases.
 v_libbluray=1.4.1
-v_libiconv=1.19
+v_libiconv=1.19.1
 v_uchardet=0.0.8
 v_bzip2=1.0.8
 v_xz=5.8.4
 v_zstd=1.5.7
-v_libarchive=3.8.10
+v_libarchive=3.8.11
 v_libdvdread=7.0.1
 v_libdvdnav=7.0.0
 v_rubberband=4.0.0
@@ -75,7 +75,7 @@ dep_mpv_android=(mpv)
 ## for CI workflow
 
 # CI resolves these movable branches to immutable commits before selecting a cache.
-v_ci_ffmpeg=release-9.0-fongmi
+v_ci_ffmpeg=release-9.1-fongmi
 v_ci_uavs3d=e72f7c34be2f4de725c1ae498e8c4f3559e99b5b
 v_ci_dav1d=master
 v_ci_libass=master

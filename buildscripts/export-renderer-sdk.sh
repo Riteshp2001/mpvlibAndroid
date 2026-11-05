@@ -1,12 +1,44 @@
 #!/bin/bash -e
+set -o pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 . buildscripts/include/depinfo.sh
 
 output=build/renderer-sdk
-libplacebo_api=
 rm -rf "$output"
 mkdir -p "$output"
+libplacebo_api=
+motion_source=buildscripts/deps/mpv
+motion_core=video/out/gpu_next/motion.c
+motion_header=video/out/gpu_next/motion.h
+for required in "$motion_core" "$motion_header" LICENSE.LGPL; do
+	[ -f "$motion_source/$required" ] || {
+		echo "Motion SDK source is missing: $motion_source/$required" >&2
+		exit 1
+	}
+done
+motion_commit=$(git -C "$motion_source" rev-parse HEAD)
+[[ "$motion_commit" =~ ^[0-9a-f]{40}$ ]] || {
+	echo "Motion SDK requires a resolved mpv commit." >&2
+	exit 1
+}
+for required in "$motion_core" "$motion_header" LICENSE.LGPL; do
+	git -C "$motion_source" cat-file -e "$motion_commit:$required" || {
+		echo "Motion SDK source is absent from its commit: $required" >&2
+		exit 1
+	}
+done
+motion_repository=$(git -C "$motion_source" remote get-url origin)
+[ -n "$motion_repository" ] || exit 1
+# The build recipe legitimately patches meson.build for the Android toolchain.
+# Only the exported core, public header and license must match this commit.
+git -C "$motion_source" diff --quiet HEAD -- "$motion_core" "$motion_header" LICENSE.LGPL || {
+	echo "Motion SDK core, header or license differs from its source commit." >&2
+	exit 1
+}
+motion_source_sha=$(sha256sum "$motion_source/$motion_core" | cut -d ' ' -f 1)
+motion_header_sha=$(sha256sum "$motion_source/$motion_header" | cut -d ' ' -f 1)
+motion_license_sha=$(sha256sum "$motion_source/LICENSE.LGPL" | cut -d ' ' -f 1)
 
 copy_abi() {
 	local prefix_name=$1
@@ -18,6 +50,11 @@ copy_abi() {
 	local vulkan="$prefix/include/libplacebo/vulkan.h"
 	local libav="$prefix/include/libplacebo/utils/libav.h"
 	local current_api
+	local receipt="$prefix/share/mpv-motion/provenance.properties"
+	local archive_sha
+	local field
+	local expected
+	local recorded
 	local header
 
 	for required in \
@@ -26,9 +63,33 @@ copy_abi() {
 		"$vulkan" \
 		"$libav" \
 		"$prefix/lib/libplacebo.a" \
-		"$prefix/lib/libshaderc.a"; do
+		"$prefix/lib/libshaderc.a" \
+		"$prefix/lib/libmpv-motion.a" \
+		"$prefix/include/mpv-motion/motion.h" \
+		"$receipt"; do
 		[ -f "$required" ] || {
 			echo "Renderer SDK input is missing: $required" >&2
+			exit 1
+		}
+	done
+	cmp -s "$motion_source/$motion_header" "$prefix/include/mpv-motion/motion.h" || {
+		echo "Installed motion header differs from its source for $android_abi." >&2
+		exit 1
+	}
+	archive_sha=$(sha256sum "$prefix/lib/libmpv-motion.a" | cut -d ' ' -f 1)
+	for field in schema.version mpv-motion.arch mpv-motion.commit mpv-motion.source.sha256 \
+		mpv-motion.header.sha256 mpv-motion.archive.sha256; do
+		case "$field" in
+			schema.version) expected=1 ;;
+			mpv-motion.arch) expected=$prefix_name ;;
+			mpv-motion.commit) expected=$motion_commit ;;
+			mpv-motion.source.sha256) expected=$motion_source_sha ;;
+			mpv-motion.header.sha256) expected=$motion_header_sha ;;
+			mpv-motion.archive.sha256) expected=$archive_sha ;;
+		esac
+		recorded=$(awk -F= -v key="$field" '$1 == key { print $2 }' "$receipt")
+		[ "$recorded" = "$expected" ] || {
+			echo "Motion SDK build receipt mismatch for $android_abi: $field" >&2
 			exit 1
 		}
 	done
@@ -73,6 +134,9 @@ copy_abi() {
 	cp -R "$prefix/include/libplacebo" "$destination/include/"
 	cp "$prefix/lib/libplacebo.a" "$destination/lib/"
 	cp "$prefix/lib/libshaderc.a" "$destination/lib/"
+	cp "$prefix/lib/libmpv-motion.a" "$destination/lib/"
+	cp -R "$prefix/include/mpv-motion" "$destination/include/"
+	cp "$receipt" "$destination/motion-build.properties"
 	(
 		cd "$destination/include"
 		find libplacebo -type f -print0 \
@@ -90,6 +154,7 @@ license=buildscripts/prefix/arm64/share/licenses/libplacebo/LICENSE
 	exit 1
 }
 cp "$license" "$output/LICENSE"
+cp "$motion_source/LICENSE.LGPL" "$output/LICENSE.mpv-motion"
 
 cat >"$output/provenance.properties" <<EOF
 schema.version=3
@@ -100,6 +165,19 @@ libplacebo.source.dirty=false
 libplacebo.api=$libplacebo_api
 libplacebo.opengl=true
 libplacebo.vulkan=true
+mpv-motion.repository=$motion_repository
+mpv-motion.commit=$motion_commit
+mpv-motion.source.path=$motion_core
+mpv-motion.source.sha256=$motion_source_sha
+mpv-motion.header.source.path=$motion_header
+mpv-motion.header.sha256=$motion_header_sha
+mpv-motion.source.scope=$motion_core,$motion_header,LICENSE.LGPL
+mpv-motion.source.dirty=false
+mpv-motion.library.path=lib/libmpv-motion.a
+mpv-motion.build.manifest=motion-build.properties
+mpv-motion.header.path=include/mpv-motion/motion.h
+mpv-motion.license.path=LICENSE.mpv-motion
+mpv-motion.license.sha256=$motion_license_sha
 shaderc.source=android-ndk
 android.ndk.version=$v_ndk
 renderer-sdk.abi.list=armeabi-v7a,arm64-v8a
