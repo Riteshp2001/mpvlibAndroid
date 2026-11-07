@@ -8,6 +8,13 @@ output=build/renderer-sdk
 rm -rf "$output"
 mkdir -p "$output"
 libplacebo_api=
+# Export runs outside buildall.sh's toolchain PATH.
+nm_tools=(buildscripts/sdk/android-ndk-"$v_ndk"/toolchains/llvm/prebuilt/*/bin/llvm-nm)
+[ "${#nm_tools[@]}" = 1 ] && [ -x "${nm_tools[0]}" ] || {
+	echo "A unique NDK llvm-nm is required for renderer SDK export." >&2
+	exit 1
+}
+
 motion_source=buildscripts/deps/mpv
 motion_core=video/out/gpu_next/motion.c
 motion_header=video/out/gpu_next/motion.h
@@ -49,6 +56,11 @@ copy_abi() {
 	local opengl="$prefix/include/libplacebo/opengl.h"
 	local vulkan="$prefix/include/libplacebo/vulkan.h"
 	local libav="$prefix/include/libplacebo/utils/libav.h"
+	local renderer="$prefix/include/libplacebo/renderer.h"
+	local colorspace="$prefix/include/libplacebo/colorspace.h"
+	local libplacebo_archive_sha
+	local libplacebo_header_sha
+	local symbols
 	local current_api
 	local receipt="$prefix/share/mpv-motion/provenance.properties"
 	local archive_sha
@@ -62,6 +74,8 @@ copy_abi() {
 		"$opengl" \
 		"$vulkan" \
 		"$libav" \
+		"$renderer" \
+		"$colorspace" \
 		"$prefix/lib/libplacebo.a" \
 		"$prefix/lib/libshaderc.a" \
 		"$prefix/lib/libmpv-motion.a" \
@@ -76,23 +90,6 @@ copy_abi() {
 		echo "Installed motion header differs from its source for $android_abi." >&2
 		exit 1
 	}
-	archive_sha=$(sha256sum "$prefix/lib/libmpv-motion.a" | cut -d ' ' -f 1)
-	for field in schema.version mpv-motion.arch mpv-motion.commit mpv-motion.source.sha256 \
-		mpv-motion.header.sha256 mpv-motion.archive.sha256; do
-		case "$field" in
-			schema.version) expected=1 ;;
-			mpv-motion.arch) expected=$prefix_name ;;
-			mpv-motion.commit) expected=$motion_commit ;;
-			mpv-motion.source.sha256) expected=$motion_source_sha ;;
-			mpv-motion.header.sha256) expected=$motion_header_sha ;;
-			mpv-motion.archive.sha256) expected=$archive_sha ;;
-		esac
-		recorded=$(awk -F= -v key="$field" '$1 == key { print $2 }' "$receipt")
-		[ "$recorded" = "$expected" ] || {
-			echo "Motion SDK build receipt mismatch for $android_abi: $field" >&2
-			exit 1
-		}
-	done
 	current_api=$(awk '$1 == "#define" && $2 == "PL_API_VER" { print $3; exit }' "$config")
 	if [[ ! "$current_api" =~ ^[0-9]+$ ]]; then
 		echo "A numeric libplacebo API is required for $android_abi." >&2
@@ -130,6 +127,57 @@ copy_abi() {
 		exit 1
 	}
 
+	for capability in CUSTOM_FRAME_MIXER SOURCE_PEAK_TIMELINE SOURCE_PEAK_IMAGE \
+		SOURCE_HOOK_PARAMETERS HDR_LINEAR; do
+		header=$renderer
+		[ "$capability" != HDR_LINEAR ] || header=$colorspace
+		grep -Eq "^#define PL_HAVE_${capability} 1([[:space:]]|$)" "$header" || {
+			echo "libplacebo is missing renderer capability PL_HAVE_${capability}=1 for $android_abi." >&2
+			exit 1
+		}
+	done
+	grep -Eq '^[[:space:]]*enum mp_motion_result mp_motion_render_views\(' \
+		"$prefix/include/mpv-motion/motion.h" || {
+		echo "Motion SDK header is missing mp_motion_render_views for $android_abi." >&2
+		exit 1
+	}
+	symbols=$("${nm_tools[0]}" --defined-only --extern-only --format=posix \
+		"$prefix/lib/libmpv-motion.a")
+	[ "$(printf '%s\n' "$symbols" | awk '
+		$1 == "mp_motion_render_views" && $2 == "T" { n++ }
+		END { print n+0 }')" = 1 ] || {
+		echo "Motion SDK archive must define mp_motion_render_views once for $android_abi." >&2
+		exit 1
+	}
+	libplacebo_archive_sha=$(sha256sum "$prefix/lib/libplacebo.a" | cut -d ' ' -f 1)
+	libplacebo_header_sha=$(
+		cd "$prefix/include"
+		find libplacebo -type f -print0 \
+			| LC_ALL=C sort -z \
+			| xargs -0 sha256sum --binary | sed 's/ \*/  /'
+	)
+	libplacebo_header_sha=$(printf '%s\n' "$libplacebo_header_sha" | sha256sum | cut -d ' ' -f 1)
+	archive_sha=$(sha256sum "$prefix/lib/libmpv-motion.a" | cut -d ' ' -f 1)
+	for field in schema.version mpv-motion.arch mpv-motion.commit mpv-motion.source.sha256 \
+		mpv-motion.header.sha256 mpv-motion.archive.sha256 \
+		libplacebo.archive.sha256 libplacebo.headers.sha256; do
+		case "$field" in
+			schema.version) expected=1 ;;
+			mpv-motion.arch) expected=$prefix_name ;;
+			mpv-motion.commit) expected=$motion_commit ;;
+			mpv-motion.source.sha256) expected=$motion_source_sha ;;
+			mpv-motion.header.sha256) expected=$motion_header_sha ;;
+			mpv-motion.archive.sha256) expected=$archive_sha ;;
+			libplacebo.archive.sha256) expected=$libplacebo_archive_sha ;;
+			libplacebo.headers.sha256) expected=$libplacebo_header_sha ;;
+		esac
+		recorded=$(awk -F= -v key="$field" '$1 == key { print $2 }' "$receipt")
+		[ "$recorded" = "$expected" ] || {
+			echo "Motion SDK build receipt mismatch for $android_abi: $field" >&2
+			exit 1
+		}
+	done
+
 	mkdir -p "$destination/include" "$destination/lib"
 	cp -R "$prefix/include/libplacebo" "$destination/include/"
 	cp "$prefix/lib/libplacebo.a" "$destination/lib/"
@@ -140,8 +188,8 @@ copy_abi() {
 	(
 		cd "$destination/include"
 		find libplacebo -type f -print0 \
-			| sort -z \
-			| xargs -0 sha256sum
+			| LC_ALL=C sort -z \
+			| xargs -0 sha256sum --binary | sed 's/ \*/  /'
 	) >"$destination/headers.sha256"
 }
 
@@ -179,7 +227,7 @@ mpv-motion.header.path=include/mpv-motion/motion.h
 mpv-motion.license.path=LICENSE.mpv-motion
 mpv-motion.license.sha256=$motion_license_sha
 shaderc.source=android-ndk
-android.ndk.version=$v_ndk
+android.ndk.version=$v_ndk_n
 renderer-sdk.abi.list=armeabi-v7a,arm64-v8a
 renderer-sdk.library.path=lib/libplacebo.a
 renderer-sdk.shaderc.library.path=lib/libshaderc.a

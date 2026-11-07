@@ -62,6 +62,19 @@ fi
 
 patch_mpv_iconv_dependency
 
+# Canonical installed header identity: relative names and contents, not mtimes.
+libplacebo_headers_sha() {
+	(
+		cd "$prefix_dir/include"
+		find libplacebo -type f -print0 \
+			| LC_ALL=C sort -z \
+			| xargs -0 sha256sum --binary | sed 's/ \*/  /'
+	) | sha256sum | cut -d ' ' -f 1
+}
+
+libplacebo_archive_sha=$(sha256sum "$prefix_dir/lib/libplacebo.a" | cut -d ' ' -f 1)
+libplacebo_header_sha=$(libplacebo_headers_sha)
+
 # FongMi's renderer SDK ships mpv's GPU motion core; record exactly which source built it.
 # The patches above must leave these files alone.
 motion_core=video/out/gpu_next/motion.c
@@ -92,6 +105,10 @@ if ! grep -Eq '^#define HAVE_CLONE 0$' "$build/config.h"; then
 fi
 
 ninja -C "$build" -j"$cores"
+if [ ! -s "$build/libmpv.so" ]; then
+	echo "Meson did not produce the required shared libmpv: $build/libmpv.so" >&2
+	exit 1
+fi
 
 if readelf --wide --dyn-syms "$build/libmpv.so" | grep -Eq '[[:space:]]clone@LIBC([[:space:]]|$)'; then
 	echo "Android libmpv still imports clone@LIBC; refusing to package it." >&2
@@ -102,11 +119,6 @@ if ! readelf --wide --dyn-syms "$build/libmpv.so" | grep -Eq '[[:space:]]fork@LI
 	exit 1
 fi
 
-if [ -f "$build/libmpv.a" ]; then
-	echo >&2 "Meson produced static libmpv.a; forcing a clean rebuild."
-	$0 clean
-	exec $0 build
-fi
 DESTDIR="$prefix_dir" ninja -C "$build" install
 
 # Bind the installed archive to the source actually used by this build.
@@ -118,6 +130,11 @@ cmp -s "$motion_header" "$prefix_dir/include/mpv-motion/motion.h" || {
 	echo "Motion SDK source or installed header changed during build." >&2
 	exit 1
 }
+[ "$libplacebo_archive_sha" = "$(sha256sum "$prefix_dir/lib/libplacebo.a" | cut -d ' ' -f 1)" ] &&
+[ "$libplacebo_header_sha" = "$(libplacebo_headers_sha)" ] || {
+	echo "Motion SDK libplacebo inputs changed during build." >&2
+	exit 1
+}
 motion_archive_sha=$(sha256sum "$prefix_dir/lib/libmpv-motion.a" | cut -d ' ' -f 1)
 mkdir -p "$(dirname "$motion_receipt")"
 cat >"$motion_receipt.tmp" <<EOF
@@ -127,5 +144,7 @@ mpv-motion.commit=$motion_commit
 mpv-motion.source.sha256=$motion_source_sha
 mpv-motion.header.sha256=$motion_header_sha
 mpv-motion.archive.sha256=$motion_archive_sha
+libplacebo.archive.sha256=$libplacebo_archive_sha
+libplacebo.headers.sha256=$libplacebo_header_sha
 EOF
 mv "$motion_receipt.tmp" "$motion_receipt"
