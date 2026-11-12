@@ -21,6 +21,10 @@ if ! git apply --reverse --check ../../patches/mpv_android_fdsan_fork.patch 2>/d
 	git apply ../../patches/mpv_android_fdsan_fork.patch
 fi
 
+if ! git apply --reverse --check ../../patches/mpv_android_font_cache.patch 2>/dev/null; then
+	git apply ../../patches/mpv_android_font_cache.patch
+fi
+
 case "$prefix_dir" in
 	"$DIR"/prefix/*) ;;
 	*) echo "Invalid build prefix: $prefix_dir" >&2; exit 1 ;;

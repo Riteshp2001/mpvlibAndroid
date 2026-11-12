@@ -1,0 +1,104 @@
+diff --git a/player/main.c b/player/main.c
+index 2fbb19d602..2351c47b01 100644
+--- a/player/main.c
++++ b/player/main.c
+@@ -62,6 +62,7 @@
+ 
+ #include "audio/out/ao.h"
+ #include "misc/thread_tools.h"
++#include "sub/ass_mp.h"
+ #include "sub/osd.h"
+ #include "video/out/vo.h"
+ 
+@@ -440,6 +441,8 @@ int mp_initialize(struct MPContext *mpctx, char **options)
+ 
+     mp_load_scripts(mpctx);
+ 
++    mp_ass_warm_font_cache(mpctx->global, opts->subs_rend->sub_style);
++
+     if (opts->force_vo == 2 && handle_force_window(mpctx, false) < 0)
+         return -1;
+ 
+diff --git a/sub/ass_mp.c b/sub/ass_mp.c
+index b8e9e5aeab..be8dc01c64 100644
+--- a/sub/ass_mp.c
++++ b/sub/ass_mp.c
+@@ -30,6 +30,7 @@
+ #include "common/common.h"
+ #include "common/msg.h"
+ #include "options/path.h"
++#include "osdep/threads.h"
+ #include "ass_mp.h"
+ #include "osd.h"
+ #include "stream/stream.h"
+@@ -99,6 +100,57 @@ void mp_ass_configure_fonts(ASS_Renderer *priv, struct osd_style_opts *opts,
+     talloc_free(tmp);
+ }
+ 
++struct font_cache_job {
++    char *config;
++    int font_provider;
++};
++
++static MP_THREAD_VOID font_cache_thread(void *arg)
++{
++    struct font_cache_job *job = arg;
++    mp_thread_set_name("font-cache");
++
++    // A throwaway renderer: setting up its fonts builds the fontconfig cache.
++    ASS_Library *library = ass_library_init();
++    if (library) {
++        ASS_Renderer *renderer = ass_renderer_init(library);
++        if (renderer) {
++            ass_set_fonts(renderer, NULL, NULL, job->font_provider, job->config, 1);
++            ass_renderer_done(renderer);
++        }
++        ass_library_done(library);
++    }
++
++    talloc_free(job);
++    MP_THREAD_RETURN();
++}
++
++// Every subtitle track and the OSD set up fonts synchronously. Without a font
++// cache that scans all system fonts on the playback thread and starves audio,
++// so build the cache in the background once a fonts.conf configures it.
++void mp_ass_warm_font_cache(struct mpv_global *global,
++                            struct osd_style_opts *opts)
++{
++    if (opts->font_provider == 1)
++        return;
++
++    struct font_cache_job *job = talloc_zero(NULL, struct font_cache_job);
++    job->config = mp_find_config_file(job, global, "fonts.conf");
++    job->font_provider = opts->font_provider == 2 ? ASS_FONTPROVIDER_FONTCONFIG
++                                                  : ASS_FONTPROVIDER_AUTODETECT;
++    if (!job->config) {
++        talloc_free(job);
++        return;
++    }
++
++    mp_thread thread;
++    if (mp_thread_create(&thread, font_cache_thread, job)) {
++        talloc_free(job);
++        return;
++    }
++    mp_thread_detach(thread);
++}
++
+ static const int map_ass_level[] = {
+     MSGL_ERR,           // 0 "FATAL errors"
+     MSGL_WARN,
+diff --git a/sub/ass_mp.h b/sub/ass_mp.h
+index ecc44231ec..4f7d11959a 100644
+--- a/sub/ass_mp.h
++++ b/sub/ass_mp.h
+@@ -51,6 +51,8 @@ void mp_ass_configure_fonts(ASS_Renderer *priv, struct osd_style_opts *opts,
+                             struct mpv_global *global, struct mp_log *log);
+ ASS_Library *mp_ass_init(struct mpv_global *global,
+                          struct osd_style_opts *opts, struct mp_log *log);
++void mp_ass_warm_font_cache(struct mpv_global *global,
++                            struct osd_style_opts *opts);
+ 
+ void mp_ass_get_bb(ASS_Image *image_list, ASS_Track *track,
+                    struct mp_osd_res *res, double *out_rc);

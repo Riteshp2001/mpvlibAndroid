@@ -33,7 +33,7 @@ This library brings the full power of mpv to Android — play any video, generat
 ### 🎨 Video Output
 - OpenGL ES rendering via libplacebo
 - GPU shader cache support
-- Subtitle rendering with libass + HarfBuzz + FriBidi
+- Subtitle rendering with libass + HarfBuzz + FriBidi, with fontconfig fallback to the Android system fonts
 - AV1 decoding via dav1d
 
 ### ⚡ Modern Android API
@@ -139,6 +139,7 @@ Utils.VERSIONS.dependencies.forEach { (name, version) ->
 | libplacebo | latest |
 | shaderc | disabled |
 | libass | latest |
+| fontconfig | 2.18.3 |
 | dav1d | latest |
 | libmysofa | 1.3.5 |
 | LittleCMS2 | 2.20 |
