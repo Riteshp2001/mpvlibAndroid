@@ -27,12 +27,13 @@ version_code() {
 	read_property versionCode
 }
 
-validate_semver() {
+# SemVer, optionally with a fourth numeric hotfix component (1.2.3.4).
+validate_version() {
 	local value=${1:-}
 	local numeric='(0|[1-9][0-9]*)'
 	local prerelease='(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)'
 	local build='[0-9A-Za-z-]+'
-	local semver="^${numeric}\\.${numeric}\\.${numeric}(-${prerelease}(\\.${prerelease})*)?(\\+${build}(\\.${build})*)?$"
+	local semver="^${numeric}\\.${numeric}\\.${numeric}(\\.${numeric})?(-${prerelease}(\\.${prerelease})*)?(\\+${build}(\\.${build})*)?$"
 	[[ "$value" =~ $semver ]]
 }
 
@@ -40,7 +41,7 @@ validate_config() {
 	local name code
 	name=$(version_name)
 	code=$(version_code)
-	validate_semver "$name" || {
+	validate_version "$name" || {
 		echo "Invalid versionName in app/build.gradle: $name" >&2
 		return 1
 	}
@@ -57,12 +58,12 @@ validate_config() {
 validate_tag() {
 	local tag=${1:-}
 	[[ "$tag" == v* ]] || {
-		echo "Release tags must use the vMAJOR.MINOR.PATCH format: $tag" >&2
+		echo "Release tags must use the vMAJOR.MINOR.PATCH[.HOTFIX] format: $tag" >&2
 		return 1
 	}
 	local tag_version=${tag#v}
-	validate_semver "$tag_version" || {
-		echo "Release tag is not valid SemVer: $tag" >&2
+	validate_version "$tag_version" || {
+		echo "Release tag is not a valid version: $tag" >&2
 		return 1
 	}
 	validate_config
