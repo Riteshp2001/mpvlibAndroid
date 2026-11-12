@@ -53,15 +53,26 @@ if [ ! -d dav1d ]; then
 fi
 
 # ffmpeg
+if [ "$IN_CI" -eq 1 ]; then
+	: "${FFMPEG_GIT_COMMIT:?FFMPEG_GIT_COMMIT must be set in CI}"
+fi
 if [ ! -d ffmpeg ]; then
 	if [ "$IN_CI" -eq 1 ]; then
-		: "${FFMPEG_GIT_COMMIT:?FFMPEG_GIT_COMMIT must be set in CI}"
 		clone_ci_commit \
 			"${FFMPEG_GIT_URL:-https://github.com/FongMi/FFmpeg.git}" \
 			"$FFMPEG_GIT_COMMIT" ffmpeg
 	else
 		git clone --branch "$v_ci_ffmpeg" \
 			"${FFMPEG_GIT_URL:-https://github.com/FongMi/FFmpeg.git}" ffmpeg
+	fi
+fi
+
+if [ "$IN_CI" -eq 1 ]; then
+	if [ ! -e ffmpeg/.git ] ||
+		! actual_commit=$(git -C ffmpeg rev-parse --verify 'HEAD^{commit}') ||
+		[[ "$actual_commit" != "$FFMPEG_GIT_COMMIT" ]]; then
+		echo "FFmpeg source revision does not match FFMPEG_GIT_COMMIT." >&2
+		exit 1
 	fi
 fi
 
@@ -125,13 +136,6 @@ if [ ! -d libaribcaption ]; then
 	mkdir libaribcaption
 	$WGET https://github.com/xqq/libaribcaption/archive/refs/tags/v${v_libaribcaption}.tar.gz -O - | \
 		tar -xz -C libaribcaption --strip-components=1
-fi
-
-# fontconfig
-if [ ! -d fontconfig ]; then
-	mkdir fontconfig
-	$WGET https://gitlab.freedesktop.org/fontconfig/fontconfig/-/archive/${v_fontconfig}/fontconfig-${v_fontconfig}.tar.gz -O - | \
-		tar -xz -C fontconfig --strip-components=1
 fi
 
 # libbluray
@@ -303,15 +307,36 @@ if [ ! -d lcms2 ]; then
 fi
 
 # libplacebo
+if [ "$IN_CI" -eq 1 ]; then
+	: "${LIBPLACEBO_GIT_COMMIT:?LIBPLACEBO_GIT_COMMIT must be set in CI}"
+fi
 if [ ! -d libplacebo ]; then
 	if [ "$IN_CI" -eq 1 ]; then
-		: "${LIBPLACEBO_GIT_COMMIT:?LIBPLACEBO_GIT_COMMIT must be set in CI}"
 		clone_ci_commit \
 			"${LIBPLACEBO_GIT_URL:-https://github.com/FongMi/libplacebo.git}" \
 			"$LIBPLACEBO_GIT_COMMIT" libplacebo recursive
 	else
 		git clone --recursive --branch "$v_ci_libplacebo" \
 			"${LIBPLACEBO_GIT_URL:-https://github.com/FongMi/libplacebo.git}" libplacebo
+	fi
+fi
+
+if [ "$IN_CI" -eq 1 ]; then
+	if [ ! -e libplacebo/.git ] ||
+		! actual_commit=$(git -C libplacebo rev-parse --verify 'HEAD^{commit}') ||
+		[[ "$actual_commit" != "$LIBPLACEBO_GIT_COMMIT" ]]; then
+		echo "libplacebo source revision does not match LIBPLACEBO_GIT_COMMIT." >&2
+		exit 1
+	fi
+	if ! source_status=$(git -C libplacebo status --porcelain \
+		--untracked-files=all --ignore-submodules=none) || [[ -n "$source_status" ]]; then
+		echo "libplacebo source must be clean before building in CI." >&2
+		exit 1
+	fi
+	if ! submodule_status=$(git -C libplacebo submodule status --recursive) ||
+		grep -q '^[-+U]' <<< "$submodule_status"; then
+		echo "libplacebo submodules must match their pinned revisions in CI." >&2
+		exit 1
 	fi
 fi
 

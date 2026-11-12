@@ -151,7 +151,7 @@ Utils.VERSIONS.dependencies.forEach { (name, version) ->
 | LuaJIT | 2.1 |
 | MuJS (JavaScript) | 1.3.11 |
 | MbedTLS | 3.6.7 |
-| FongMi extensions | libaribcaption, fontconfig, curl, libbluray, iconv, uchardet, libarchive, dvdnav, rubberband |
+| FongMi extensions | libaribcaption, curl, libbluray, iconv, uchardet, libarchive, dvdnav, rubberband |
 | FFmpeg packaging | single `libffmpeg.so` shared core |
 | HarfBuzz | 15.1.0 |
 | FreeType | 2.15.0 |

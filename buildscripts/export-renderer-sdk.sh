@@ -47,6 +47,15 @@ motion_source_sha=$(sha256sum "$motion_source/$motion_core" | cut -d ' ' -f 1)
 motion_header_sha=$(sha256sum "$motion_source/$motion_header" | cut -d ' ' -f 1)
 motion_license_sha=$(sha256sum "$motion_source/LICENSE.LGPL" | cut -d ' ' -f 1)
 
+sha256_manifest() {
+	LC_ALL=C sort -z | xargs -0 sha256sum --binary | sed 's/ \*/  /'
+}
+
+libplacebo_headers_manifest() (
+	cd "$1" || exit
+	find libplacebo -type f -print0 | sha256_manifest
+)
+
 copy_abi() {
 	local prefix_name=$1
 	local android_abi=$2
@@ -150,13 +159,8 @@ copy_abi() {
 		exit 1
 	}
 	libplacebo_archive_sha=$(sha256sum "$prefix/lib/libplacebo.a" | cut -d ' ' -f 1)
-	libplacebo_header_sha=$(
-		cd "$prefix/include"
-		find libplacebo -type f -print0 \
-			| LC_ALL=C sort -z \
-			| xargs -0 sha256sum --binary | sed 's/ \*/  /'
-	)
-	libplacebo_header_sha=$(printf '%s\n' "$libplacebo_header_sha" | sha256sum | cut -d ' ' -f 1)
+	libplacebo_header_sha=$(libplacebo_headers_manifest "$prefix/include" \
+		| sha256sum | cut -d ' ' -f 1)
 	archive_sha=$(sha256sum "$prefix/lib/libmpv-motion.a" | cut -d ' ' -f 1)
 	for field in schema.version mpv-motion.arch mpv-motion.commit mpv-motion.source.sha256 \
 		mpv-motion.header.sha256 mpv-motion.archive.sha256 \
@@ -185,12 +189,7 @@ copy_abi() {
 	cp "$prefix/lib/libmpv-motion.a" "$destination/lib/"
 	cp -R "$prefix/include/mpv-motion" "$destination/include/"
 	cp "$receipt" "$destination/motion-build.properties"
-	(
-		cd "$destination/include"
-		find libplacebo -type f -print0 \
-			| LC_ALL=C sort -z \
-			| xargs -0 sha256sum --binary | sed 's/ \*/  /'
-	) >"$destination/headers.sha256"
+	libplacebo_headers_manifest "$destination/include" >"$destination/headers.sha256"
 }
 
 copy_abi armv7l armeabi-v7a
@@ -240,7 +239,5 @@ EOF
 
 (
 	cd "$output"
-	find . -type f ! -name files.sha256 -print0 \
-		| sort -z \
-		| xargs -0 sha256sum
+	find . -type f ! -name files.sha256 -print0 | sha256_manifest
 ) >"$output/files.sha256"

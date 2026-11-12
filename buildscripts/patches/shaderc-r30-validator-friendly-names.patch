@@ -1,0 +1,11 @@
+Backport google/shaderc 3871c0aa9169b1bbe52facf999770645f52b354c (#1442).
+Disable diagnostic name construction; keep optimizer validation enabled.
+
+--- a/libshaderc_util/src/spirv_tools_wrapper.cc
++++ b/libshaderc_util/src/spirv_tools_wrapper.cc
+@@ -120,4 +120,5 @@
+   spvtools::ValidatorOptions val_opts;
++  val_opts.SetFriendlyNames(false);
+   // This allows flexible memory layout for HLSL.
+   val_opts.SetSkipBlockLayout(true);
+   // This allows HLSL legalization regarding resources.
