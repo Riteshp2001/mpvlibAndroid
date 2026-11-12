@@ -47,6 +47,42 @@ object Utils {
                 out?.close()
             }
         }
+        writeFontsConf(context, File("$configDir/fonts.conf"))
+    }
+
+    private const val FONTS_CONF_MARKER = "<!-- Written by mpvlib. Remove this line to keep your own changes. -->"
+
+    /**
+     * Points fontconfig at the Android system fonts with a writable cache, so subtitle tracks
+     * load the cache instead of scanning every font. A fonts.conf without the marker line
+     * belongs to the user and is left alone.
+     */
+    private fun writeFontsConf(context: Context, configFile: File) {
+        val cacheDir = File(context.cacheDir, "fontconfig")
+        val content = listOf(
+            FONTS_CONF_MARKER,
+            "<fontconfig>",
+            "<dir>/system/fonts/</dir>",
+            "<dir>/product/fonts/</dir>",
+            "<cachedir>${cacheDir.path}</cachedir>",
+            // Android has no API for its generic families, so name the stock ones.
+            "<alias><family>serif</family><prefer><family>Noto Serif</family></prefer></alias>",
+            "<alias><family>sans-serif</family><prefer><family>Roboto</family><family>Noto Sans</family></prefer></alias>",
+            "<alias><family>monospace</family><prefer><family>Droid Sans Mono</family></prefer></alias>",
+            "</fontconfig>",
+            "",
+        ).joinToString("\n")
+        try {
+            cacheDir.mkdirs()
+            if (configFile.exists()) {
+                val existing = configFile.readText()
+                if (existing == content || !existing.startsWith(FONTS_CONF_MARKER))
+                    return
+            }
+            configFile.writeText(content)
+        } catch (e: IOException) {
+            Log.w(TAG, "Failed to write fonts.conf", e)
+        }
     }
 
     fun findRealPath(fd: Int): String? {
