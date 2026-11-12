@@ -138,6 +138,13 @@ if [ ! -d libaribcaption ]; then
 		tar -xz -C libaribcaption --strip-components=1
 fi
 
+# fontconfig
+if [ ! -d fontconfig ]; then
+	mkdir fontconfig
+	$WGET https://gitlab.freedesktop.org/fontconfig/fontconfig/-/archive/${v_fontconfig}/fontconfig-${v_fontconfig}.tar.gz -O - | \
+		tar -xz -C fontconfig --strip-components=1
+fi
+
 # libbluray
 if [ ! -d libbluray ]; then
 	mkdir libbluray
