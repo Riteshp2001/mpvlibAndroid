@@ -23,7 +23,7 @@ import kotlin.math.abs
 object Utils {
     fun copyAssets(context: Context) {
         val assetManager = context.assets
-        val files = arrayOf("subfont.ttf", "cacert.pem")
+        val files = arrayOf("cacert.pem")
         val configDir = context.filesDir.path
         for (filename in files) {
             var ins: InputStream? = null
@@ -47,6 +47,10 @@ object Utils {
                 out?.close()
             }
         }
+        // Older versions copied a 15 MB fallback font here. Fontconfig now finds a system font
+        // for every script, so free the space and keep mpv from loading the stale copy.
+        File("$configDir/subfont.ttf").delete()
+
         writeFontsConf(context, File("$configDir/fonts.conf"))
     }
 
