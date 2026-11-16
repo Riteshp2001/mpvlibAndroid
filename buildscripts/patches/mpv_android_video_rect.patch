@@ -1,0 +1,236 @@
+diff --git a/DOCS/man/input.rst b/DOCS/man/input.rst
+index 70c3418852..a938f807f2 100644
+--- a/DOCS/man/input.rst
++++ b/DOCS/man/input.rst
+@@ -3201,6 +3201,16 @@ Property list
+     Any of these properties may be unavailable or set to dummy values if the
+     VO window is not created or visible.
+ 
++``android-video-rect``
++    Where an Android application must place the video Surface of
++    ``--vo=mediacodec_embed``, as ``w:h:left:top:right:bottom``. MediaCodec
++    scales every frame to the whole Surface, so aspect, crop, zoom and pan only
++    apply once the Surface covers this rectangle of a ``w`` x ``h`` viewport.
++    The rectangle spans the whole decoded frame and can extend past the
++    viewport. ``--android-surface-size`` must keep the full player size while
++    the Surface is moved. Unavailable until video is configured, or without
++    ``--android-surface-size``.
++
+ ``term-size``
+     The current terminal size.
+ 
+diff --git a/player/command.c b/player/command.c
+index 981fe47a4d..e8f6164157 100644
+--- a/player/command.c
++++ b/player/command.c
+@@ -3148,6 +3148,21 @@ static int mp_property_gpu_context(void *ctx, struct m_property *p, int action,
+                                 mpctx->video_out->context_name : NULL);
+ }
+ 
++// "w:h:left:top:right:bottom": the Surface placement a vo_mediacodec_embed host
++// needs, as the decoder cannot scale or letterbox its own output.
++static int mp_property_android_video_rect(void *ctx, struct m_property *prop,
++                                          int action, void *arg)
++{
++    MPContext *mpctx = ctx;
++    struct vo_android_video_rect r;
++    if (!mpctx->video_out || !vo_get_android_video_rect(mpctx->video_out, &r))
++        return M_PROPERTY_UNAVAILABLE;
++    char s[96];
++    snprintf(s, sizeof(s), "%d:%d:%d:%d:%d:%d", r.w, r.h,
++             r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1);
++    return m_property_strdup_ro(action, arg, s);
++}
++
+ static int mp_property_osd_dim(void *ctx, struct m_property *prop,
+                                int action, void *arg)
+ {
+@@ -4818,6 +4833,8 @@ static const struct m_property mp_properties_base[] = {
+     M_PROPERTY_ALIAS("osd-height", "osd-dimensions/h"),
+     M_PROPERTY_ALIAS("osd-par", "osd-dimensions/par"),
+ 
++    {"android-video-rect", mp_property_android_video_rect},
++
+     {"osd-sym-cc", mp_property_osd_sym},
+     {"osd-ass-cc", mp_property_osd_ass},
+ 
+@@ -4948,7 +4965,7 @@ static const char *const *const mp_event_property_change[] = {
+       "video-format", "video-codec", "video-bitrate", "dwidth", "dheight",
+       "width", "height", "container-fps", "aspect", "aspect-name", "vo-configured", "current-vo",
+       "video-dec-params", "osd-dimensions", "hwdec", "hwdec-current", "hwdec-interop",
+-      "window-id", "track-list", "current-tracks"),
++      "window-id", "track-list", "current-tracks", "android-video-rect"),
+     E(MPV_EVENT_AUDIO_RECONFIG, "audio-format", "audio-codec", "audio-bitrate",
+       "samplerate", "channels", "audio", "volume", "volume-gain", "mute",
+       "current-ao", "audio-codec-name", "audio-params", "track-list", "current-tracks",
+@@ -4964,7 +4981,7 @@ static const char *const *const mp_event_property_change[] = {
+     E(MP_EVENT_WIN_RESIZE, "current-window-scale", "osd-width", "osd-height",
+       "osd-par", "osd-dimensions"),
+     E(MP_EVENT_WIN_STATE, "display-names", "display-fps", "display-width",
+-      "display-height"),
++      "display-height", "android-video-rect"),
+     E(MP_EVENT_WIN_STATE2, "display-hidpi-scale"),
+     E(MP_EVENT_FOCUS, "focused"),
+     E(MP_EVENT_AMBIENT_LIGHTING_CHANGED, "ambient-light"),
+diff --git a/video/out/vo.c b/video/out/vo.c
+index c90a55cc4c..80e1c0df72 100644
+--- a/video/out/vo.c
++++ b/video/out/vo.c
+@@ -141,6 +141,7 @@ struct vo_internal {
+     bool wakeup_on_done;
+     int queued_events;              // event mask for the user
+     int internal_events;            // event mask for us
++    struct vo_android_video_rect android_video_rect;
+ 
+     double nominal_vsync_interval;
+ 
+@@ -1328,6 +1329,32 @@ void vo_get_src_dst_rects(struct vo *vo, struct mp_rect *out_src,
+                          out_src, out_dst, out_osd);
+ }
+ 
++void vo_android_publish_video_rect(struct vo *vo,
++                                   const struct vo_android_video_rect *rect)
++{
++    struct vo_internal *in = vo->in;
++    struct vo_android_video_rect next = {0};
++    if (rect && rect->w > 0 && rect->h > 0)
++        next = *rect;
++    mp_mutex_lock(&in->lock);
++    struct vo_android_video_rect *cur = &in->android_video_rect;
++    bool changed = cur->w != next.w || cur->h != next.h ||
++                   !mp_rect_equals(&cur->rect, &next.rect);
++    *cur = next;
++    mp_mutex_unlock(&in->lock);
++    if (changed)
++        vo_event(vo, VO_EVENT_WIN_STATE);
++}
++
++bool vo_get_android_video_rect(struct vo *vo, struct vo_android_video_rect *out)
++{
++    struct vo_internal *in = vo->in;
++    mp_mutex_lock(&in->lock);
++    *out = in->android_video_rect;
++    mp_mutex_unlock(&in->lock);
++    return out->w > 0 && out->h > 0;
++}
++
+ // flip_page[_timed] will be called offset_us nanoseconds too early.
+ // (For vo_vdpau, which does its own timing.)
+ // num_req_frames set the requested number of requested vo_frame.frames.
+diff --git a/video/out/vo.h b/video/out/vo.h
+index f24918d460..71e56c4460 100644
+--- a/video/out/vo.h
++++ b/video/out/vo.h
+@@ -577,6 +577,19 @@ struct mp_osd_res;
+ void vo_get_src_dst_rects(struct vo *vo, struct mp_rect *out_src,
+                           struct mp_rect *out_dst, struct mp_osd_res *out_osd);
+ 
++// Where an Android host must place a video Surface that receives decoder
++// buffers unscaled (vo_mediacodec_embed), in pixels of a w*h viewport. The rect
++// covers the whole decoded frame and may extend past the viewport.
++struct vo_android_video_rect {
++    int w, h;
++    struct mp_rect rect;
++};
++
++// VO thread only. NULL withdraws the rect.
++void vo_android_publish_video_rect(struct vo *vo,
++                                   const struct vo_android_video_rect *rect);
++bool vo_get_android_video_rect(struct vo *vo, struct vo_android_video_rect *out);
++
+ struct vo_frame *vo_frame_ref(struct vo_frame *frame);
+ 
+ struct mp_image_params vo_get_current_params(struct vo *vo);
+diff --git a/video/out/vo_mediacodec_embed.c b/video/out/vo_mediacodec_embed.c
+index 985b52660f..dd31f40795 100644
+--- a/video/out/vo_mediacodec_embed.c
++++ b/video/out/vo_mediacodec_embed.c
+@@ -15,11 +15,15 @@
+  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#include <math.h>
++
+ #include <libavcodec/mediacodec.h>
+ #include <libavutil/hwcontext.h>
+ #include <libavutil/hwcontext_mediacodec.h>
+ 
+ #include "common/common.h"
++#include "aspect.h"
++#include "sub/osd.h"
+ #include "vo.h"
+ #include "video/mp_image.h"
+ #include "video/hwdec.h"
+@@ -27,8 +31,50 @@
+ struct priv {
+     struct mp_image *next_image;
+     struct mp_hwdec_ctx hwctx;
++    bool rect_valid; // configured for real video, not a force-window placeholder
+ };
+ 
++static int rect_coord(double v)
++{
++    return lrint(MPCLAMP(v, -1e9, 1e9));
++}
++
++// MediaCodec scales every buffer to the whole Surface, so mpv's aspect, crop,
++// zoom and pan only apply once the host fits the Surface to this rect.
++static void publish_video_rect(struct vo *vo)
++{
++    struct priv *p = vo->priv;
++    struct mp_image_params *params = vo->params;
++    // android-surface-size must describe the whole player, not the moved Surface.
++    int w = vo->opts->android_surface_size.w;
++    int h = vo->opts->android_surface_size.h;
++    if (!p->rect_valid || !params || w <= 0 || h <= 0)
++        return;
++
++    struct mp_rect src, dst;
++    struct mp_osd_res osd;
++    mp_get_src_dst_rects(vo->log, vo->opts, vo->driver->caps, params, w, h,
++                         vo->monitor_par, &src, &dst, &osd);
++    // The OSD margins are not clipped to the viewport, so they still locate
++    // the displayed picture when it is zoomed or panned past the edges.
++    struct mp_rect crop = {0, 0, params->w, params->h};
++    if (mp_image_crop_valid(params))
++        crop = params->crop;
++    double sx = (double)(w - osd.ml - osd.mr) / mp_rect_w(crop);
++    double sy = (double)(h - osd.mt - osd.mb) / mp_rect_h(crop);
++    struct vo_android_video_rect out = {
++        .w = w,
++        .h = h,
++        .rect = {
++            .x0 = rect_coord(osd.ml - crop.x0 * sx),
++            .y0 = rect_coord(osd.mt - crop.y0 * sy),
++            .x1 = rect_coord(osd.ml + (params->w - crop.x0) * sx),
++            .y1 = rect_coord(osd.mt + (params->h - crop.y0) * sy),
++        },
++    };
++    vo_android_publish_video_rect(vo, &out);
++}
++
+ static AVBufferRef *create_mediacodec_device_ref(struct vo *vo)
+ {
+     AVBufferRef *device_ref = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_MEDIACODEC);
+@@ -96,11 +142,21 @@ static int query_format(struct vo *vo, int format)
+ 
+ static int control(struct vo *vo, uint32_t request, void *data)
+ {
++    switch (request) {
++    case VOCTRL_SET_PANSCAN:
++    case VOCTRL_EXTERNAL_RESIZE:
++        publish_video_rect(vo);
++        return VO_TRUE;
++    }
+     return VO_NOTIMPL;
+ }
+ 
+ static int reconfig(struct vo *vo, struct mp_image_params *params)
+ {
++    struct priv *p = vo->priv;
++    // A placeholder keeps the last rect, which still frames the held frame.
++    p->rect_valid = !params->force_window;
++    publish_video_rect(vo);
+     return 0;
+ }
+ 
