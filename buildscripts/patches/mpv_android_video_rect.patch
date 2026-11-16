@@ -1,0 +1,264 @@
+diff --git a/DOCS/man/input.rst b/DOCS/man/input.rst
+index 5509b6bba2..e0cadf36e7 100644
+--- a/DOCS/man/input.rst
++++ b/DOCS/man/input.rst
+@@ -4004,6 +4004,16 @@ Property list
+     same Surface. A layout resize can reuse that submission until video reset or
+     reconfiguration; codec source dimensions are independent of View dimensions.
+ 
++``android-video-rect``
++    Where an Android application must place the video Surface of
++    ``--vo=mediacodec_embed``, as ``w:h:left:top:right:bottom``. MediaCodec
++    scales every frame to the whole Surface, so aspect, crop, zoom and pan only
++    apply once the Surface covers this rectangle of the ``w`` x ``h`` OSD
++    Surface, where subtitles are placed with the same geometry. The rectangle
++    spans the whole decoded frame and can extend past the viewport.
++    Unavailable until video is configured and while
++    ``--android-video-surface-transform`` delegates the layout.
++
+ ``vo-passes``
+     Contains introspection about the VO's active render passes and their
+     execution times. Not implemented by all VOs.
+diff --git a/player/command.c b/player/command.c
+index 8c04db2b2e..c8dbff7545 100644
+--- a/player/command.c
++++ b/player/command.c
+@@ -3187,6 +3187,21 @@ static int mp_property_android_surface_frame(void *ctx, struct m_property *prop,
+ }
+ #endif
+ 
++// "w:h:left:top:right:bottom": the Surface placement a vo_mediacodec_embed host
++// needs, as the decoder cannot scale or letterbox its own output.
++static int mp_property_android_video_rect(void *ctx, struct m_property *prop,
++                                          int action, void *arg)
++{
++    MPContext *mpctx = ctx;
++    struct vo_android_video_rect r;
++    if (!mpctx->video_out || !vo_get_android_video_rect(mpctx->video_out, &r))
++        return M_PROPERTY_UNAVAILABLE;
++    char s[96];
++    snprintf(s, sizeof(s), "%d:%d:%d:%d:%d:%d", r.w, r.h,
++             r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1);
++    return m_property_strdup_ro(action, arg, s);
++}
++
+ static void get_frame_perf(struct mpv_node *node, struct mp_frame_perf *perf)
+ {
+     for (int i = 0; i < perf->count; i++) {
+@@ -5026,6 +5041,7 @@ static const struct m_property mp_properties_base[] = {
+     {"android-video-surface-frame", mp_property_android_surface_frame},
+     {"android-gpu-output-switch-supported", mp_property_android_gpu_output_switch},
+ #endif
++    {"android-video-rect", mp_property_android_video_rect},
+     {"vo-passes", mp_property_vo_passes},
+     {"motion-interpolation-info", mp_property_motion_info},
+     {"perf-info", mp_property_perf_info},
+@@ -5179,7 +5195,7 @@ static const char *const *const mp_event_property_change[] = {
+       "video-dec-params", "osd-dimensions", "hwdec", "hwdec-current", "hwdec-interop",
+       "window-id", "track-list", "current-tracks", "current-window-scale",
+       "android-video-surface-transform-active", "android-video-surface-frame",
+-      "motion-interpolation-info"),
++      "android-video-rect", "motion-interpolation-info"),
+     E(MPV_EVENT_AUDIO_RECONFIG, "audio-format", "audio-codec", "audio-bitrate",
+       "samplerate", "channels", "audio", "volume", "volume-gain", "mute",
+       "current-ao", "audio-codec-name", "audio-params", "track-list", "current-tracks",
+@@ -5198,7 +5214,7 @@ static const char *const *const mp_event_property_change[] = {
+     E(MP_EVENT_OSD_RESIZE, "osd-width", "osd-height", "osd-par", "osd-dimensions"),
+     E(MP_EVENT_WIN_STATE, "display-names", "display-fps", "display-width",
+       "display-height", "android-video-surface-transform-active",
+-      "android-video-surface-frame"),
++      "android-video-surface-frame", "android-video-rect"),
+     E(MP_EVENT_WIN_STATE2, "display-hidpi-scale"),
+     E(MP_EVENT_FOCUS, "focused"),
+     E(MP_EVENT_AMBIENT_LIGHTING_CHANGED, "ambient-light"),
+diff --git a/video/out/vo.c b/video/out/vo.c
+index fe893d7923..737d7c5f94 100644
+--- a/video/out/vo.c
++++ b/video/out/vo.c
+@@ -154,6 +154,7 @@ struct vo_internal {
+     bool backend_error;
+     int queued_events;              // event mask for the user
+     int internal_events;            // event mask for us
++    struct vo_android_video_rect android_video_rect;
+ 
+     double nominal_vsync_interval;
+ 
+@@ -1584,6 +1585,32 @@ void vo_get_src_dst_rects(struct vo *vo, struct mp_rect *out_src,
+                          out_src, out_dst, out_osd);
+ }
+ 
++void vo_android_publish_video_rect(struct vo *vo,
++                                   const struct vo_android_video_rect *rect)
++{
++    struct vo_internal *in = vo->in;
++    struct vo_android_video_rect next = {0};
++    if (rect && rect->w > 0 && rect->h > 0)
++        next = *rect;
++    mp_mutex_lock(&in->lock);
++    struct vo_android_video_rect *cur = &in->android_video_rect;
++    bool changed = cur->w != next.w || cur->h != next.h ||
++                   !mp_rect_equals(&cur->rect, &next.rect);
++    *cur = next;
++    mp_mutex_unlock(&in->lock);
++    if (changed)
++        vo_event(vo, VO_EVENT_WIN_STATE);
++}
++
++bool vo_get_android_video_rect(struct vo *vo, struct vo_android_video_rect *out)
++{
++    struct vo_internal *in = vo->in;
++    mp_mutex_lock(&in->lock);
++    *out = in->android_video_rect;
++    mp_mutex_unlock(&in->lock);
++    return out->w > 0 && out->h > 0;
++}
++
+ // flip_page[_timed] will be called offset_us nanoseconds too early.
+ // (For vo_vdpau, which does its own timing.)
+ // num_req_frames set the requested number of requested vo_frame.frames.
+diff --git a/video/out/vo.h b/video/out/vo.h
+index d4183e9a9f..76de072772 100644
+--- a/video/out/vo.h
++++ b/video/out/vo.h
+@@ -650,6 +650,19 @@ struct mp_osd_res;
+ void vo_get_src_dst_rects(struct vo *vo, struct mp_rect *out_src,
+                           struct mp_rect *out_dst, struct mp_osd_res *out_osd);
+ 
++// Where an Android host must place a video Surface that receives decoder
++// buffers unscaled (vo_mediacodec_embed), in pixels of a w*h viewport. The rect
++// covers the whole decoded frame and may extend past the viewport.
++struct vo_android_video_rect {
++    int w, h;
++    struct mp_rect rect;
++};
++
++// VO thread only. NULL withdraws the rect.
++void vo_android_publish_video_rect(struct vo *vo,
++                                   const struct vo_android_video_rect *rect);
++bool vo_get_android_video_rect(struct vo *vo, struct vo_android_video_rect *out);
++
+ struct vo_frame *vo_frame_ref(struct vo_frame *frame);
+ 
+ struct mp_image_params vo_get_current_params(struct vo *vo);
+diff --git a/video/out/vo_mediacodec_embed.c b/video/out/vo_mediacodec_embed.c
+index a466346d0d..6ec1694c59 100644
+--- a/video/out/vo_mediacodec_embed.c
++++ b/video/out/vo_mediacodec_embed.c
+@@ -15,6 +15,8 @@
+  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#include <math.h>
++
+ #include <libavcodec/mediacodec.h>
+ #include <libavutil/hwcontext.h>
+ #include <libavutil/hwcontext_mediacodec.h>
+@@ -22,6 +24,8 @@
+ #include "common/common.h"
+ #include "android_common.h"
+ #include "android_osd_overlay.h"
++#include "aspect.h"
++#include "sub/osd.h"
+ #include "vo.h"
+ #include "video/mp_image.h"
+ #include "video/hwdec.h"
+@@ -36,10 +40,58 @@ struct priv {
+     bool osd_render_ok;
+     bool backend_failed;
+     bool submitted_video;
++    bool rect_valid; // configured for real video, not a force-window placeholder
+ };
+ 
+ #define MAX_OSD_FAILURES 3
+ 
++static int rect_coord(double v)
++{
++    return lrint(MPCLAMP(v, -1e9, 1e9));
++}
++
++// MediaCodec scales every buffer to the whole Surface, so mpv's aspect, crop,
++// zoom and pan only apply once the host fits the Surface to this rect.
++static void publish_video_rect(struct vo *vo)
++{
++    struct priv *p = vo->priv;
++    struct mp_image_params *params = vo->params;
++    if (!p->rect_valid || !params)
++        return;
++    // android-video-surface-transform: the host already lays the Surface out.
++    if (android_osd_overlay_transforms_video(p->osd_overlay)) {
++        vo_android_publish_video_rect(vo, NULL);
++        return;
++    }
++    // Subtitles are placed on the full-size OSD Surface; share its viewport.
++    int w = 0, h = 0;
++    if (!android_osd_overlay_get_size(p->osd_overlay, &w, &h) || w <= 0 || h <= 0)
++        return;
++
++    struct mp_rect src, dst;
++    struct mp_osd_res osd;
++    mp_get_src_dst_rects(vo->log, vo->opts, vo->driver->caps, params, w, h,
++                         vo->monitor_par, &src, &dst, &osd);
++    // The OSD margins are not clipped to the viewport, so they still locate
++    // the displayed picture when it is zoomed or panned past the edges.
++    struct mp_rect crop = {0, 0, params->w, params->h};
++    if (mp_image_crop_valid(params))
++        crop = params->crop;
++    double sx = (double)(w - osd.ml - osd.mr) / mp_rect_w(crop);
++    double sy = (double)(h - osd.mt - osd.mb) / mp_rect_h(crop);
++    struct vo_android_video_rect out = {
++        .w = w,
++        .h = h,
++        .rect = {
++            .x0 = rect_coord(osd.ml - crop.x0 * sx),
++            .y0 = rect_coord(osd.mt - crop.y0 * sy),
++            .x1 = rect_coord(osd.ml + (params->w - crop.x0) * sx),
++            .y1 = rect_coord(osd.mt + (params->h - crop.y0) * sy),
++        },
++    };
++    vo_android_publish_video_rect(vo, &out);
++}
++
+ static void report_backend_error(struct vo *vo, const char *component)
+ {
+     struct priv *p = vo->priv;
+@@ -204,6 +256,7 @@ static int control(struct vo *vo, uint32_t request, void *data)
+     }
+     if (request == VOCTRL_EXTERNAL_RESIZE) {
+         update_surface_frame(vo);
++        publish_video_rect(vo);
+         return VO_TRUE;
+     }
+     if (request == VOCTRL_SET_PANSCAN ||
+@@ -211,6 +264,7 @@ static int control(struct vo *vo, uint32_t request, void *data)
+         request == VOCTRL_UPDATE_OSD_SIZE)
+     {
+         android_osd_overlay_invalidate_geometry(p->osd_overlay);
++        publish_video_rect(vo);
+         vo->want_redraw = true;
+         return VO_TRUE;
+     }
+@@ -226,6 +280,7 @@ static int control(struct vo *vo, uint32_t request, void *data)
+     if (!android_osd_overlay_set_surface(
+             p->osd_overlay, vo->opts->android_osd_wid))
+         return VO_FALSE;
++    publish_video_rect(vo);
+     vo->want_redraw = true;
+     return VO_TRUE;
+ }
+@@ -234,6 +289,8 @@ static int reconfig(struct vo *vo, struct mp_image_params *params)
+ {
+     struct priv *p = vo->priv;
+     p->submitted_video = false;
++    // A placeholder keeps the last rect, which still frames the held frame.
++    p->rect_valid = !params->force_window;
+     android_osd_overlay_invalidate_geometry(p->osd_overlay);
+     int width = 0;
+     int height = 0;
+@@ -241,6 +298,7 @@ static int reconfig(struct vo *vo, struct mp_image_params *params)
+         vo->dwidth = width;
+         vo->dheight = height;
+     }
++    publish_video_rect(vo);
+     return 0;
+ }
+ 
