@@ -31,6 +31,7 @@ jobs:
 
       CACHE_MODE: folder
       CACHE_FOLDER: ${{ github.workspace }}/gh-cache
+      LIBPLACEBO_CACHE_FOLDER: ${{ github.workspace }}/gh-libplacebo-cache
 
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -89,6 +90,13 @@ jobs:
           restore-keys: |
             native-prefix-${{ runner.os }}-
 
+      - name: Restore libplacebo cache
+        id: libplacebo-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: gh-libplacebo-cache/
+          key: libplacebo-${{ runner.os }}-${{ env.LIBPLACEBO_CACHE_IDENTIFIER }}
+
       - name: Restore ccache
         id: ccache-cache
         uses: actions/cache/restore@v6
@@ -132,7 +140,7 @@ jobs:
       - name: Download and restore native dependencies
         run: |
           set -euxo pipefail
-          mkdir -p "$CACHE_FOLDER"
+          mkdir -p "$CACHE_FOLDER" "$LIBPLACEBO_CACHE_FOLDER"
           buildscripts/include/ci.sh install
 
       - name: Save Android SDK cache
@@ -148,6 +156,13 @@ jobs:
         with:
           path: gh-cache/
           key: native-prefix-${{ runner.os }}-${{ env.CACHE_IDENTIFIER }}
+
+      - name: Save libplacebo cache
+        if: steps.libplacebo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: gh-libplacebo-cache/
+          key: libplacebo-${{ runner.os }}-${{ env.LIBPLACEBO_CACHE_IDENTIFIER }}
 
       - name: Show ccache stats before build
         run: |

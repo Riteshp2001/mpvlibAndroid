@@ -43,22 +43,21 @@ grep -Eq '^#define PL_HAVE_LCMS 1([[:space:]]|$)' "$config_header" || {
 }
 
 ninja -C "$build" -j"$cores"
-DESTDIR="$prefix_dir" ninja -C "$build" install
+destdir=${LIBPLACEBO_DESTDIR:-$prefix_dir}
+install_prefix=$prefix_dir
+if [ -n "${LIBPLACEBO_DESTDIR:-}" ]; then
+	install_prefix=$destdir/usr/local
+fi
+DESTDIR="$destdir" ninja -C "$build" install
 "${INSTALL:-install}" -Dm644 LICENSE \
-	"$prefix_dir/share/licenses/libplacebo/LICENSE"
-
-link_libs=()
-for lib in shaderc lcms2; do
-	[ -f "$prefix_dir/lib/lib${lib}.a" ] && link_libs+=("-l${lib}")
-done
-link_libs+=("-lc++")
+	"$install_prefix/share/licenses/libplacebo/LICENSE"
 
 # add missing libraries for static linking
 # this isn't "-lstdc++" due to a meson bug: https://github.com/mesonbuild/meson/issues/11300
-${SED:-sed} "/^Libs:/ s|$| ${link_libs[*]}|" "$prefix_dir/lib/pkgconfig/libplacebo.pc" -i
+${SED:-sed} '/^Libs:/ s|$| -lshaderc -llcms2 -lc++|' "$install_prefix/lib/pkgconfig/libplacebo.pc" -i
 
 # Ensure static LittleCMS2 reaches libmpv through pkg-config's regular Libs.
-pkg-config --libs libplacebo | grep -Fq -- '-llcms2' || {
+grep -Eq '^Libs:.*[[:space:]]-llcms2([[:space:]]|$)' "$install_prefix/lib/pkgconfig/libplacebo.pc" || {
 	echo "libplacebo pkg-config metadata is missing -llcms2" >&2
 	exit 1
 }

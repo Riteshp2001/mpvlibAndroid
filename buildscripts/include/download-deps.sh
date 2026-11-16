@@ -5,6 +5,11 @@
 [ -z "$IN_CI" ] && IN_CI=0
 [ -z "$WGET" ] && WGET=wget
 
+case "${1:-all}" in
+	all|base|libplacebo) scope=${1:-all} ;;
+	*) echo "Unknown dependency scope: $1" >&2; exit 1 ;;
+esac
+
 mkdir -p deps && cd deps
 
 clone_ci_commit() {
@@ -31,6 +36,47 @@ clone_ci_commit() {
 		return 1
 	fi
 }
+
+download_libplacebo() {
+	local actual_commit source_status submodule_status
+	if [ "$IN_CI" -eq 1 ]; then
+		: "${LIBPLACEBO_GIT_COMMIT:?LIBPLACEBO_GIT_COMMIT must be set in CI}"
+	fi
+	if [ ! -d libplacebo ]; then
+		if [ "$IN_CI" -eq 1 ]; then
+			clone_ci_commit \
+				"${LIBPLACEBO_GIT_URL:-https://github.com/FongMi/libplacebo.git}" \
+				"$LIBPLACEBO_GIT_COMMIT" libplacebo recursive
+		else
+			git clone --recursive --branch "$v_ci_libplacebo" \
+				"${LIBPLACEBO_GIT_URL:-https://github.com/FongMi/libplacebo.git}" libplacebo
+		fi
+	fi
+
+	if [ "$IN_CI" -eq 1 ]; then
+		if [ ! -e libplacebo/.git ] ||
+			! actual_commit=$(git -C libplacebo rev-parse --verify 'HEAD^{commit}') ||
+			[[ "$actual_commit" != "$LIBPLACEBO_GIT_COMMIT" ]]; then
+			echo "libplacebo source revision does not match LIBPLACEBO_GIT_COMMIT." >&2
+			exit 1
+		fi
+		if ! source_status=$(git -C libplacebo status --porcelain \
+			--untracked-files=all --ignore-submodules=none) || [[ -n "$source_status" ]]; then
+			echo "libplacebo source must be clean before building in CI." >&2
+			exit 1
+		fi
+		if ! submodule_status=$(git -C libplacebo submodule status --recursive) ||
+			grep -q '^[-+U]' <<< "$submodule_status"; then
+			echo "libplacebo submodules must match their pinned revisions in CI." >&2
+			exit 1
+		fi
+	fi
+}
+
+if [[ "$scope" == libplacebo ]]; then
+	download_libplacebo
+	exit 0
+fi
 
 # mbedtls
 if [ ! -d mbedtls ]; then
@@ -313,40 +359,6 @@ if [ ! -d lcms2 ]; then
 	git clone --depth 1 --branch "lcms${v_lcms2}" https://github.com/mm2/Little-CMS.git lcms2
 fi
 
-# libplacebo
-if [ "$IN_CI" -eq 1 ]; then
-	: "${LIBPLACEBO_GIT_COMMIT:?LIBPLACEBO_GIT_COMMIT must be set in CI}"
-fi
-if [ ! -d libplacebo ]; then
-	if [ "$IN_CI" -eq 1 ]; then
-		clone_ci_commit \
-			"${LIBPLACEBO_GIT_URL:-https://github.com/FongMi/libplacebo.git}" \
-			"$LIBPLACEBO_GIT_COMMIT" libplacebo recursive
-	else
-		git clone --recursive --branch "$v_ci_libplacebo" \
-			"${LIBPLACEBO_GIT_URL:-https://github.com/FongMi/libplacebo.git}" libplacebo
-	fi
-fi
-
-if [ "$IN_CI" -eq 1 ]; then
-	if [ ! -e libplacebo/.git ] ||
-		! actual_commit=$(git -C libplacebo rev-parse --verify 'HEAD^{commit}') ||
-		[[ "$actual_commit" != "$LIBPLACEBO_GIT_COMMIT" ]]; then
-		echo "libplacebo source revision does not match LIBPLACEBO_GIT_COMMIT." >&2
-		exit 1
-	fi
-	if ! source_status=$(git -C libplacebo status --porcelain \
-		--untracked-files=all --ignore-submodules=none) || [[ -n "$source_status" ]]; then
-		echo "libplacebo source must be clean before building in CI." >&2
-		exit 1
-	fi
-	if ! submodule_status=$(git -C libplacebo submodule status --recursive) ||
-		grep -q '^[-+U]' <<< "$submodule_status"; then
-		echo "libplacebo submodules must match their pinned revisions in CI." >&2
-		exit 1
-	fi
-fi
-
 # curl
 if [ ! -d curl ]; then
 	mkdir curl
@@ -354,14 +366,18 @@ if [ ! -d curl ]; then
 		tar -xz -C curl --strip-components=1
 fi
 
-# mpv
-: "${MPV_GIT_URL:=https://github.com/FongMi/mpv.git}"
-: "${MPV_GIT_REF:=fongmi}"
-if [ ! -d mpv ]; then
-	if [ -n "$MPV_GIT_REF" ]; then
-		git clone --branch "$MPV_GIT_REF" "$MPV_GIT_URL" mpv
-	else
-		git clone "$MPV_GIT_URL" mpv
+if [[ "$scope" == all ]]; then
+	download_libplacebo
+
+	# mpv
+	: "${MPV_GIT_URL:=https://github.com/FongMi/mpv.git}"
+	: "${MPV_GIT_REF:=fongmi}"
+	if [ ! -d mpv ]; then
+		if [ -n "$MPV_GIT_REF" ]; then
+			git clone --branch "$MPV_GIT_REF" "$MPV_GIT_URL" mpv
+		else
+			git clone "$MPV_GIT_URL" mpv
+		fi
 	fi
 fi
 
