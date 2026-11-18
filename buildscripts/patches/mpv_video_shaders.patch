@@ -1,5 +1,5 @@
 diff --git a/video/csputils.c b/video/csputils.c
-index 695f23fc2..bb918ff64 100644
+index 695f23fc2c..bb918ff645 100644
 --- a/video/csputils.c
 +++ b/video/csputils.c
 @@ -375,6 +375,56 @@ void mp_get_csp_matrix(struct mp_csp_params *params, struct pl_transform3x3 *m)
@@ -60,7 +60,7 @@ index 695f23fc2..bb918ff64 100644
  
      // The values below are written in 0-255 scale - thus bring s into range.
 diff --git a/video/out/gpu/video_shaders.c b/video/out/gpu/video_shaders.c
-index b96bb9754..abababb36 100644
+index b96bb9754c..abababb362 100644
 --- a/video/out/gpu/video_shaders.c
 +++ b/video/out/gpu/video_shaders.c
 @@ -1022,21 +1022,151 @@ void pass_sample_deband(struct gl_shader_cache *sc, struct deband_opts *opts,
@@ -229,11 +229,11 @@ index b96bb9754..abababb36 100644
 +
      GLSLF("}\n");
  }
-diff --git a/video/out/vo_gpu_next.c b/video/out/vo_gpu_next.c
-index 68af6bb67..23255e071 100644
---- a/video/out/vo_gpu_next.c
-+++ b/video/out/vo_gpu_next.c
-@@ -218,6 +218,10 @@ struct priv {
+diff --git a/video/out/gpu_next/video.c b/video/out/gpu_next/video.c
+index 4157dfa223..d7ce05c3e2 100644
+--- a/video/out/gpu_next/video.c
++++ b/video/out/gpu_next/video.c
+@@ -210,6 +210,10 @@ struct mppl_video {
      const struct pl_hook_par **source_parameters;
      enum pl_color_levels output_levels;
  
@@ -244,7 +244,7 @@ index 68af6bb67..23255e071 100644
      struct pl_icc_params icc_params;
      char *icc_path;
      pl_icc_object icc_profile;
-@@ -3786,6 +3790,7 @@ static void uninit(struct vo *vo)
+@@ -3807,6 +3811,7 @@ void mppl_video_uninit(struct mppl_video *p)
          pl_tex_destroy(p->gpu, &p->sub_tex[i]);
      for (int i = 0; i < p->num_user_hooks; i++)
          pl_mpv_user_shader_destroy(&p->user_hooks[i].hook);
@@ -252,7 +252,7 @@ index 68af6bb67..23255e071 100644
  
      timer_pool_destroy(p->sw_upload_timer);
  
-@@ -4349,6 +4354,123 @@ static void update_render_options(struct vo *vo)
+@@ -4341,6 +4346,123 @@ static void update_render_options(struct mppl_video *p)
      update_icc_opts(p, opts->icc_opts);
  
      pars->params.num_hooks = 0;
@@ -366,7 +366,7 @@ index 68af6bb67..23255e071 100644
 +            p->sharpen_hook = pl_mpv_user_shader_parse(
 +                p->gpu, shader, strlen(shader));
 +            if (!p->sharpen_hook)
-+                MP_WARN(vo, "gpu-next: failed to compile sharpen hook\n");
++                MP_WARN(p, "gpu-next: failed to compile sharpen hook\n");
 +        }
 +    }
 +    if (p->sharpen_hook)
