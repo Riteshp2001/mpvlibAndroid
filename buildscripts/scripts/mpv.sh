@@ -62,6 +62,10 @@ if ! git apply --reverse --check ../../patches/mpv_android_pause_passthrough.pat
 	git apply ../../patches/mpv_android_pause_passthrough.patch
 fi
 
+if ! git apply --reverse --check ../../patches/mpv_osd_vao_fix.patch 2>/dev/null; then
+	git apply ../../patches/mpv_osd_vao_fix.patch
+fi
+
 unset CC CXX # meson wants these unset
 
 check_iconv_files
