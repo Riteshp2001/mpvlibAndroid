@@ -66,6 +66,10 @@ if ! git apply --reverse --check ../../patches/mpv_osd_vao_fix.patch 2>/dev/null
 	git apply ../../patches/mpv_osd_vao_fix.patch
 fi
 
+if ! git apply --reverse --check ../../patches/mpv_dolby_vision_output_mode.patch 2>/dev/null; then
+	git apply ../../patches/mpv_dolby_vision_output_mode.patch
+fi
+
 unset CC CXX # meson wants these unset
 
 check_iconv_files

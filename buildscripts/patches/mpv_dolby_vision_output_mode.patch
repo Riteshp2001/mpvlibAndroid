@@ -1,0 +1,57 @@
+diff --git a/player/video.c b/player/video.c
+index dd5566c..16e4904 100644
+--- a/player/video.c
++++ b/player/video.c
+@@ -528,6 +528,14 @@ static bool reinit_video_chain_internal(struct MPContext *mpctx,
+         mpctx->mouse_cursor_visible = true;
+     }
+ 
++    // mediacodec_embed is also used for ordinary HEVC/HDR10 base-layer output.
++    // Its driver capability alone must not make FFmpeg request a Dolby Vision
++    // MediaCodec decoder. Enable the native sink only for an active Direct
++    // Dolby Vision session, and clear it again when Direct output falls back.
++    mpctx->video_out->native_dovi_sink =
++        use_dovi_direct &&
++        (mpctx->video_out->driver->caps & VO_CAP_NATIVE_DOVI);
++
+     update_window_title(mpctx, true);
+ 
+     struct vo_chain *vo_c = talloc_zero(NULL, struct vo_chain);
+diff --git a/video/decode/vd_lavc.c b/video/decode/vd_lavc.c
+index 29acd79..b031389 100644
+--- a/video/decode/vd_lavc.c
++++ b/video/decode/vd_lavc.c
+@@ -661,8 +661,7 @@ static void select_and_set_hwdec(struct mp_filter *vd)
+ {
+     vd_ffmpeg_ctx *ctx = vd->priv;
+     const char *codec = ctx->codec->codec;
+-    bool native_dovi_sink =
+-        ctx->vo && (ctx->vo->driver->caps & VO_CAP_NATIVE_DOVI);
++    bool native_dovi_sink = ctx->vo && ctx->vo->native_dovi_sink;
+ 
+     update_hwdec_options(ctx);
+ 
+@@ -1023,8 +1022,7 @@ static void init_avctx(struct mp_filter *vd)
+         break;
+     }
+ 
+-    bool native_dovi_sink =
+-        ctx->vo && (ctx->vo->driver->caps & VO_CAP_NATIVE_DOVI);
++    bool native_dovi_sink = ctx->vo && ctx->vo->native_dovi_sink;
+     bool gpu_dovi_mapping = supports_gpu_dovi_mapping(ctx);
+     set_decoder_avopts(vd->log, avctx, lavc_param->avopts,
+                        native_dovi_sink, gpu_dovi_mapping);
+diff --git a/video/out/vo.h b/video/out/vo.h
+index 3400fd4..c6718ce 100644
+--- a/video/out/vo.h
++++ b/video/out/vo.h
+@@ -533,6 +533,9 @@ struct vo {
+ 
+     // --- The following fields are generally only changed during initialization.
+ 
++    // Whether this VO instance is currently selected as a native Dolby Vision
++    // sink. VO_CAP_NATIVE_DOVI describes capability; this describes active use.
++    bool native_dovi_sink;
+     bool probing;
+ 
+     // --- The following fields are only changed with vo_reconfig(), and can
