@@ -10,21 +10,21 @@ v_sdk_platform=36
 v_sdk_build_tools=37.0.0
 
 # LuaJIT 2.1 is a rolling release, so pin a commit of its v2.1 branch
-v_luajit=ea9eb7edb5eac4a9d175d74523db34fac0fa5180
+v_luajit=96f7b297326e9fd454b7186c6858b2773f94a0dc
 v_lcms2=2.20
 # mpv release built by the library and no-vulkan variants (FongMi builds its own fork)
 v_mpv=0.42.0
-v_unibreak=8.0
-v_harfbuzz=15.1.0
+v_unibreak=8.0.1
+v_harfbuzz=15.2.0
 v_fribidi=1.0.18
 v_freetype=2.15.0
-v_mbedtls=3.6.7
+v_mbedtls=3.6.8
 v_openssl=3.6.5
 v_mujs=1.3.11
 v_libxml2=2.15.4
 v_libmysofa=1.3.5
 v_libaribcaption=1.1.2
-v_fontconfig=2.18.3
+v_fontconfig=2.18.4
 v_curl=8.23.0
 v_libbluray=1.5.0
 v_libiconv=1.19.1
@@ -77,7 +77,7 @@ dep_mpv_android=(mpv)
 ## for CI workflow
 
 # pinned ffmpeg revision
-v_ci_ffmpeg=n9.0.2
+v_ci_ffmpeg=n9.1
 
 # filename used to uniquely identify a build prefix
 ci_tarball="prefix-ndk-${v_ndk}-luajit-${v_luajit}-mujs-${v_mujs}-unibreak-${v_unibreak}-harfbuzz-${v_harfbuzz}-fribidi-${v_fribidi}-freetype-${v_freetype}-libxml2-${v_libxml2}-libmysofa-${v_libmysofa}-libaribcaption-${v_libaribcaption}-fontconfig-${v_fontconfig}-mbedtls-${v_mbedtls}-curl-${v_curl}-libbluray-${v_libbluray}-libiconv-${v_libiconv}-uchardet-${v_uchardet}-bzip2-${v_bzip2}-xz-${v_xz}-zstd-${v_zstd}-libarchive-${v_libarchive}-libdvdread-${v_libdvdread}-libdvdnav-${v_libdvdnav}-rubberband-${v_rubberband}-openssl-${v_openssl}-ffmpeg-${v_ci_ffmpeg}-lcms2-${v_lcms2}.tgz"
