@@ -316,7 +316,7 @@ check_sha256() {
 
 download_luajit() {
 	local archive=luajit-$v_luajit.tar.gz
-	local checksum=338a5640be00b89fd0a2a027a7433fcbbb4d006be840d216d84151386b5bcdf7
+	local checksum=ce9d03b33e4c28492e8dacacf69c6975a0502cf9225957a6b42dc28f92cbbd34
 	local url
 
 	for url in \
