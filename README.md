@@ -150,13 +150,13 @@ Utils.VERSIONS.dependencies.forEach { (name, version) ->
 | LittleCMS2 | 2.20 |
 | LuaJIT | 2.1 |
 | MuJS (JavaScript) | 1.3.11 |
-| MbedTLS | 3.6.7 |
+| MbedTLS | 3.6.8 |
 | FongMi extensions | libaribcaption, fontconfig, curl, libbluray, iconv, uchardet, libarchive, dvdnav, rubberband |
 | FFmpeg packaging | single `libffmpeg.so` shared core |
-| HarfBuzz | 15.1.0 |
+| HarfBuzz | 15.2.0 |
 | FreeType | 2.15.0 |
 | FriBidi | 1.0.18 |
-| libunibreak | 8.0 |
+| libunibreak | 8.0.1 |
 | Android NDK | r30 |
 | Min API | 24 (Android 7.0) |
 
