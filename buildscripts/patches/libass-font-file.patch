@@ -1,0 +1,278 @@
+diff --git a/libass/ass.h b/libass/ass.h
+index 851ca7c..b24cffa 100644
+--- a/libass/ass.h
++++ b/libass/ass.h
+@@ -595,6 +595,17 @@ void ass_set_selective_style_override(ASS_Renderer *priv, ASS_Style *style);
+ ASS_DEPRECATED("it does nothing")
+ int ass_fonts_update(ASS_Renderer *priv);
+ 
++/**
++ * Prefer a single font file and face index for requests for this family.
++ * Open the file after ass_set_fonts. Other families and missing glyphs use
++ * the normal providers. Pass NULL as path to clear the preference.
++ * A failed change returns zero and leaves the previous selection intact.
++ * Calling ass_set_fonts clears the preference.
++ */
++#define LIBASS_HAS_FONT_FILE 1
++int ass_set_font_file(ASS_Renderer *priv, const char *path, int index,
++                      const char *family);
++
+ /**
+  * \brief Set hard cache limits.  Do not set, or set to zero, for reasonable
+  * defaults.
+diff --git a/libass/ass_font.c b/libass/ass_font.c
+index aa12ca1..89b8c04 100644
+--- a/libass/ass_font.c
++++ b/libass/ass_font.c
+@@ -376,14 +376,18 @@ read_stream_font(FT_Stream stream, unsigned long offset, unsigned char *buffer,
+ {
+     ASS_FontStream *font = (ASS_FontStream *)stream->descriptor.pointer;
+ 
+-    font->func(font->priv, buffer, offset, count);
+-    return count;
++    if (!count)
++        return offset > stream->size;
++    return font->func(font->priv, buffer, offset, count);
+ }
+ 
+ static void
+ close_stream_font(FT_Stream stream)
+ {
+-    free(stream->descriptor.pointer);
++    ASS_FontStream *font = stream->descriptor.pointer;
++    if (font->release)
++        font->release(font->priv);
++    free(font);
+     free(stream);
+ }
+ 
+@@ -404,6 +408,8 @@ FT_Face ass_face_stream(ASS_Library *lib, FT_Library ftlib, const char *name,
+     ftstream->read  = read_stream_font;
+     ftstream->close = close_stream_font;
+     ftstream->descriptor.pointer = (void *)fs;
++    if (fs->retain)
++        fs->retain(fs->priv);
+ 
+     FT_Open_Args args = {
+         .flags  = FT_OPEN_STREAM,
+@@ -435,7 +441,7 @@ static int add_face(ASS_FontSelector *fontsel, ASS_Font *font, uint32_t ch)
+     char *path;
+     char *postscript_name = NULL;
+     int i, index, uid;
+-    ASS_FontStream stream = { NULL, NULL };
++    ASS_FontStream stream = {0};
+     FT_Face face;
+     int ret = -1;
+ 
+diff --git a/libass/ass_fontselect.c b/libass/ass_fontselect.c
+index 2303876..32ba9c1 100644
+--- a/libass/ass_fontselect.c
++++ b/libass/ass_fontselect.c
+@@ -82,6 +82,16 @@ struct font_info {
+     bool is_postscript;
+ };
+ 
++typedef struct {
++    FILE *file;
++    long length;
++    char *path;
++    char *family;
++    int index;
++    int uid;
++    unsigned refs;
++} PreferredFontFile;
++
+ struct font_selector {
+     ASS_Library *library;
+     FT_Library ftlibrary;
+@@ -94,6 +104,9 @@ struct font_selector {
+     char *path_default;
+     int index_default;
+ 
++    PreferredFontFile *preferred_file;
++    FT_Face preferred_face;
++
+     // font database
+     int n_font;
+     int alloc_font;
+@@ -871,6 +884,96 @@ static char *select_font(ASS_FontSelector *priv,
+ }
+ 
+ 
++static size_t read_preferred_file(void *data, unsigned char *buffer,
++                                  size_t offset, size_t length)
++{
++    PreferredFontFile *file = data;
++    if (!buffer)
++        return file->length;
++    if (offset >= (size_t) file->length || fseek(file->file, offset, SEEK_SET))
++        return 0;
++    return fread(buffer, 1, length, file->file);
++}
++
++static void retain_preferred_file(void *data)
++{
++    PreferredFontFile *file = data;
++    file->refs++;
++}
++
++static void release_preferred_file(void *data)
++{
++    PreferredFontFile *file = data;
++    if (--file->refs)
++        return;
++    if (file->file)
++        fclose(file->file);
++    free(file->path);
++    free(file->family);
++    free(file);
++}
++
++static ASS_FontStream preferred_stream(PreferredFontFile *file)
++{
++    return (ASS_FontStream) {
++        .func = read_preferred_file,
++        .priv = file,
++        .retain = retain_preferred_file,
++        .release = release_preferred_file,
++    };
++}
++
++static void clear_preferred_file(ASS_FontSelector *priv)
++{
++    if (priv->preferred_face)
++        FT_Done_Face(priv->preferred_face);
++    if (priv->preferred_file)
++        release_preferred_file(priv->preferred_file);
++    priv->preferred_face = NULL;
++    priv->preferred_file = NULL;
++}
++
++bool ass_fontselect_set_file(ASS_FontSelector *priv, const char *path, int index,
++                             const char *family)
++{
++    if (!path) {
++        clear_preferred_file(priv);
++        return true;
++    }
++    if (!family || !*family || index < 0 || index > UINT16_MAX)
++        return false;
++
++    PreferredFontFile *file = calloc(1, sizeof(*file));
++    if (!file)
++        return false;
++    file->refs = 1;
++    file->path = strdup(path);
++    file->family = strdup(family);
++    file->file = ass_open_file(path, FN_EXTERNAL);
++    if (!file->path || !file->family || !file->file ||
++            fseek(file->file, 0, SEEK_END) ||
++            (file->length = ftell(file->file)) <= 0)
++        goto fail;
++
++    ASS_FontStream stream = preferred_stream(file);
++    FT_Face face = ass_face_stream(priv->library, priv->ftlibrary, path,
++                                   &stream, index);
++    if (!face)
++        goto fail;
++    ass_charmap_magic(priv->library, face);
++
++    clear_preferred_file(priv);
++    file->index = index;
++    file->uid = priv->uid++;
++    priv->preferred_face = face;
++    priv->preferred_file = file;
++    return true;
++
++fail:
++    release_preferred_file(file);
++    return false;
++}
++
+ /**
+  * \brief Find a font. Use default family or path if necessary.
+  * \param family font family
+@@ -891,7 +994,16 @@ char *ass_font_select(ASS_FontSelector *priv,
+     unsigned italic = font->desc.italic;
+     ASS_FontProvider *default_provider = priv->default_provider;
+ 
+-    if (family && *family)
++    PreferredFontFile *file = priv->preferred_file;
++    if (file && family && !ass_strcasecmp(family, file->family) &&
++            (!code || FT_Get_Char_Index(priv->preferred_face, code))) {
++        *index = file->index;
++        *uid = file->uid;
++        *data = preferred_stream(file);
++        res = file->path;
++    }
++
++    if (!res && family && *family)
+         res = select_font(priv, family, false, bold, italic, index,
+                 postscript_name, uid, data, code);
+ 
+@@ -1168,6 +1280,7 @@ void ass_fontselect_free(ASS_FontSelector *priv)
+     free(priv->font_infos);
+     free(priv->path_default);
+     free(priv->family_default);
++    clear_preferred_file(priv);
+ 
+     free(priv);
+ }
+diff --git a/libass/ass_fontselect.h b/libass/ass_fontselect.h
+index 9cd8cfe..5fb6747 100644
+--- a/libass/ass_fontselect.h
++++ b/libass/ass_fontselect.h
+@@ -221,6 +221,8 @@ struct ass_font_stream {
+     size_t  (*func)(void *font_priv, unsigned char *data,
+                     size_t offset, size_t len);
+     void *priv;
++    void (*retain)(void *priv);
++    void (*release)(void *priv);
+ };
+ 
+ 
+@@ -251,6 +253,8 @@ ass_fontselect_init(ASS_Library *library, FT_Library ftlibrary, size_t *num_emfo
+ char *ass_font_select(ASS_FontSelector *priv,
+                       const ASS_Font *font, int *index, char **postscript_name,
+                       int *uid, ASS_FontStream *data, uint32_t code);
++bool ass_fontselect_set_file(ASS_FontSelector *priv, const char *path, int index,
++                             const char *family);
+ void ass_fontselect_free(ASS_FontSelector *priv);
+ 
+ // Font provider functions
+diff --git a/libass/ass_render_api.c b/libass/ass_render_api.c
+index ee1620a..6096287 100644
+--- a/libass/ass_render_api.c
++++ b/libass/ass_render_api.c
+@@ -166,6 +166,19 @@ void ass_set_fonts(ASS_Renderer *priv, const char *default_font,
+             &priv->num_emfonts, default_family, default_font, config, dfp);
+ }
+ 
++int ass_set_font_file(ASS_Renderer *priv, const char *path, int index,
++                      const char *family)
++{
++    if (!priv->fontselect ||
++            !ass_fontselect_set_file(priv->fontselect, path, index, family))
++        return 0;
++    ass_reconfigure(priv);
++    ass_cache_empty(priv->cache.face_size_metrics_cache);
++    ass_cache_empty(priv->cache.metrics_cache);
++    ass_cache_empty(priv->cache.font_cache);
++    return 1;
++}
++
+ void ass_set_selective_style_override_enabled(ASS_Renderer *priv, int bits)
+ {
+     if (priv->settings.selective_style_overrides != bits) {
+diff --git a/libass/libass.sym b/libass/libass.sym
+index 4cc6215..5a99494 100644
+--- a/libass/libass.sym
++++ b/libass/libass.sym
+@@ -15,6 +15,7 @@ ass_set_font_scale
+ ass_set_hinting
+ ass_set_line_spacing
+ ass_get_available_font_providers
++ass_set_font_file
+ ass_set_fonts
+ ass_render_frame
+ ass_new_track

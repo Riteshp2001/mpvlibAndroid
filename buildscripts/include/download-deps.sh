@@ -291,9 +291,11 @@ if [ ! -d rubberband ]; then
 fi
 
 # libass
+if [ "$IN_CI" -eq 1 ]; then
+	: "${LIBASS_GIT_COMMIT:?LIBASS_GIT_COMMIT must be set in CI}"
+fi
 if [ ! -d libass ]; then
 	if [ "$IN_CI" -eq 1 ]; then
-		: "${LIBASS_GIT_COMMIT:?LIBASS_GIT_COMMIT must be set in CI}"
 		clone_ci_commit \
 			"${LIBASS_GIT_URL:-https://github.com/libass/libass}" \
 			"$LIBASS_GIT_COMMIT" libass
@@ -302,6 +304,24 @@ if [ ! -d libass ]; then
 			"${LIBASS_GIT_URL:-https://github.com/libass/libass}" libass
 	fi
 fi
+if [ "$IN_CI" -eq 1 ]; then
+	if [ ! -e libass/.git ] ||
+		! actual_commit=$(git -C libass rev-parse --verify 'HEAD^{commit}') ||
+		[[ "$actual_commit" != "$LIBASS_GIT_COMMIT" ]]; then
+		echo "libass source revision does not match LIBASS_GIT_COMMIT." >&2
+		exit 1
+	fi
+fi
+for libass_patch in ../patches/libass-font-size-em.patch \
+	../patches/libass-line-height.patch \
+	../patches/libass-font-file.patch; do
+	if patch --batch --forward --fuzz=0 --dry-run -d libass -p1 < "$libass_patch" >/dev/null 2>&1; then
+		patch --batch --forward --fuzz=0 -d libass -p1 < "$libass_patch"
+	elif ! patch --batch --reverse --fuzz=0 --dry-run -d libass -p1 < "$libass_patch" >/dev/null 2>&1; then
+		echo "libass source does not match $libass_patch." >&2
+		exit 1
+	fi
+done
 
 # luajit
 check_sha256() {

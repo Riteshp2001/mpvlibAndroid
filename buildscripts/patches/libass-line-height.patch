@@ -1,0 +1,83 @@
+diff --git a/libass/ass_parse.c b/libass/ass_parse.c
+--- a/libass/ass_parse.c
++++ b/libass/ass_parse.c
+@@ -905,6 +905,15 @@
+             int32_t val = argtoi32(*args);
+             val = (val < 0) ? 0 : val;
+             state->drawing_scale = val;
++        } else if (tag("lh")) {
++            // Event line height in script units. Like pos, it is not animated.
++            if (!nested && nargs == 1 && state->line_height < 0) {
++                char *value = args[0].start;
++                double height;
++                if (mystrtod(&value, &height) && value == args[0].end &&
++                    isfinite(height) && height >= 0)
++                    state->line_height = height;
++            }
+         } else if (tag("q")) {
+             int32_t val = argtoi32(*args);
+             if (!nargs || !(val >= 0 && val <= 3))
+diff --git a/libass/ass_render.h b/libass/ass_render.h
+--- a/libass/ass_render.h
++++ b/libass/ass_render.h
+@@ -214,6 +214,7 @@
+
+     ASS_Event *event;
+     ASS_Style *style;
++    double line_height;
+
+     ASS_Font *font;
+     double font_size;
+diff --git a/libass/ass_render.c b/libass/ass_render.c
+--- a/libass/ass_render.c
++++ b/libass/ass_render.c
+@@ -1119,6 +1119,7 @@
+     ASS_Renderer *render_priv = state->renderer;
+
+     state->event = event;
++    state->line_height = -1;
+     state->parsed_tags = 0;
+     state->evt_type = EVENT_NORMAL;
+
+@@ -1578,9 +1579,18 @@
+                                 double max_border_x, double max_border_y)
+ {
+     TextInfo *text_info = &state->text_info;
+-    text_info->lines[cur_line].asc  = scale * max_asc;
+-    text_info->lines[cur_line].desc = scale * max_desc;
+-    text_info->height += scale * max_asc + scale * max_desc;
++    double asc = scale * max_asc;
++    double desc = scale * max_desc;
++    if (state->line_height >= 0) {
++        // Keep the total line advance representable in signed 26.6 coordinates.
++        double height = FFMIN(state->line_height * state->screen_scale_y,
++                              INT32_MAX / (64.0 * text_info->n_lines));
++        asc += (height - asc - desc) * 0.5;
++        desc = height - asc;
++    }
++    text_info->lines[cur_line].asc  = asc;
++    text_info->lines[cur_line].desc = desc;
++    text_info->height += asc + desc;
+     // For *VSFilter compatibility do biased rounding on max_border*
+     // https://github.com/Cyberbeing/xy-VSFilter/blob/xy_sub_filter_rc4@%7B2020-05-17%7D/src/subtitles/RTS.cpp#L1465
+     text_info->border_bottom = (int) (state->border_scale_y * max_border_y + 0.5);
+@@ -1646,7 +1656,8 @@
+     assert(cur_line == text_info->n_lines - 1);
+     measure_text_on_eol(state, scale, cur_line,
+             max_asc, max_desc, max_border_x, max_border_y);
+-    text_info->height += cur_line * render_priv->settings.line_spacing;
++    if (state->line_height < 0)
++        text_info->height += cur_line * render_priv->settings.line_spacing;
+ }
+
+ /**
+@@ -2250,7 +2261,8 @@
+             pen.x = 0;
+             pen.y += double_to_d6(text_info->lines[lineno-1].desc);
+             pen.y += double_to_d6(text_info->lines[lineno].asc);
+-            pen.y += double_to_d6(render_priv->settings.line_spacing);
++            if (state->line_height < 0)
++                pen.y += double_to_d6(render_priv->settings.line_spacing);
+             lineno++;
+         }
+         if (info->skip)

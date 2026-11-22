@@ -1,0 +1,152 @@
+diff --git a/libass/ass.c b/libass/ass.c
+index b9ce81115dfe29e86af93c5c8a6a7472e38a0a07..8699db4248de99d874d792167dee1b2bcfeef782 100644
+--- a/libass/ass.c
++++ b/libass/ass.c
+@@ -1824,6 +1824,9 @@ int ass_track_set_feature(ASS_Track *track, ASS_Feature feature, int enable)
+     case ASS_FEATURE_INCOMPATIBLE_EXTENSIONS:
+         requested = supported;
+         break;
++    case ASS_FEATURE_FONT_SIZE_EM:
++        requested = FEATURE_MASK(ASS_FEATURE_FONT_SIZE_EM);
++        break;
+     default:
+         if (!(FEATURE_MASK(feature) & supported))
+             return -1;
+diff --git a/libass/ass.h b/libass/ass.h
+index 851ca7cb9614f8d5d3175bbcc2925dfb6521bc27..dc790172f04b875858e884dc3cb012bb50b72e36 100644
+--- a/libass/ass.h
++++ b/libass/ass.h
+@@ -25,6 +25,7 @@
+ #include "ass_types.h"
+
+ #define LIBASS_VERSION 0x01705000
++#define LIBASS_HAS_FONT_SIZE_EM 1
+
+ #ifdef __cplusplus
+ extern "C" {
+@@ -285,6 +286,12 @@ typedef enum {
+      * libass was compiled without libunibreak support.
+      */
+     ASS_FEATURE_WRAP_UNICODE,
++    /**
++     * Interpret font sizes as em sizes instead of ASS character heights.
++     * This is intended for renderers of other subtitle formats. It is
++     * disabled by default and is independent of the other extensions.
++     */
++    ASS_FEATURE_FONT_SIZE_EM,
+
+     // New enum values can be added here in new ABI-compatible library releases.
+ } ASS_Feature;
+diff --git a/libass/ass_cache_template.h b/libass/ass_cache_template.h
+index 84d6f4cc74d653b1950262947f0e869acb1e4e70..1e98423ec28ede14caf3d3770c07e6ec1ea26fd6 100644
+--- a/libass/ass_cache_template.h
++++ b/libass/ass_cache_template.h
+@@ -55,6 +55,7 @@ START(font, ass_font_desc )
+     GENERIC(unsigned, bold)
+     GENERIC(unsigned, italic)
+     GENERIC(int, vertical)  // @font vertical layout
++    GENERIC(bool, size_in_em)
+ END(ASS_FontDesc)
+
+ // describes an outline bitmap
+diff --git a/libass/ass_font.c b/libass/ass_font.c
+index aa12ca11d28ff797b6e8e849b4c257ef3cbf7fc2..254f4d99f8be9f790b6948a695b9e3194c240cb6 100644
+--- a/libass/ass_font.c
++++ b/libass/ass_font.c
+@@ -509,6 +509,7 @@ size_t ass_font_construct(void *key, void *value, void *priv)
+     font->desc.bold = desc->bold;
+     font->desc.italic = desc->italic;
+     font->desc.vertical = desc->vertical;
++    font->desc.size_in_em = desc->size_in_em;
+
+     int error = add_face(render_priv->fontselect, font, 0);
+     if (error == -1)
+@@ -516,15 +517,16 @@ size_t ass_font_construct(void *key, void *value, void *priv)
+     return 1;
+ }
+
+-void ass_face_set_size(FT_Face face, double size)
++void ass_font_set_size(ASS_Font *font, int face_index, double size)
+ {
+     FT_Size_RequestRec rq;
+     memset(&rq, 0, sizeof(rq));
+-    rq.type = FT_SIZE_REQUEST_TYPE_REAL_DIM;
++    rq.type = font->desc.size_in_em ? FT_SIZE_REQUEST_TYPE_NOMINAL :
++                                     FT_SIZE_REQUEST_TYPE_REAL_DIM;
+     rq.width = 0;
+     rq.height = double_to_d6(size);
+     rq.horiResolution = rq.vertResolution = 0;
+-    FT_Request_Size(face, &rq);
++    FT_Request_Size(font->faces[face_index], &rq);
+ }
+
+ bool ass_face_is_postscript(FT_Face face)
+diff --git a/libass/ass_font.h b/libass/ass_font.h
+index 23882498787d3d263a292e9f3db196af17796a92..fa12c9e194d89915936c44bcd4f654869ae0da19 100644
+--- a/libass/ass_font.h
++++ b/libass/ass_font.h
+@@ -51,7 +51,7 @@ struct ass_font {
+
+ void ass_charmap_magic(ASS_Library *library, FT_Face face);
+ ASS_Font *ass_font_new(ASS_Renderer *render_priv, ASS_FontDesc *desc);
+-void ass_face_set_size(FT_Face face, double size);
++void ass_font_set_size(ASS_Font *font, int face_index, double size);
+ int ass_face_get_weight(FT_Face face);
+ FT_Long ass_face_get_style_flags(FT_Face face);
+ bool ass_face_is_postscript(FT_Face face);
+diff --git a/libass/ass_parse.c b/libass/ass_parse.c
+index 28d49e71d8f2469f0ad8fef27238533a6f986090..fd8fa6365cad0e1205a38950e3496a9c8307e140 100644
+--- a/libass/ass_parse.c
++++ b/libass/ass_parse.c
+@@ -25,6 +25,7 @@
+ #include <math.h>
+
+ #include "ass_library.h"
++#include "ass_priv.h"
+ #include "ass_render.h"
+ #include "ass_parse.h"
+
+@@ -86,6 +87,8 @@ void ass_update_font(RenderContext *state)
+     ASS_FontDesc desc;
+
+     desc.family = state->family;
++    desc.size_in_em = state->renderer->track->parser_priv->feature_flags &
++                      FEATURE_MASK(ASS_FEATURE_FONT_SIZE_EM);
+     if (!desc.family.str)
+         return;
+     if (desc.family.len && desc.family.str[0] == '@') {
+diff --git a/libass/ass_render.c b/libass/ass_render.c
+index 18f856a8eae43390871d2cc6ea6920a3c7fc303d..0fd98dff48c20c3f80fcdbb10e2736ac293f83ab 100644
+--- a/libass/ass_render.c
++++ b/libass/ass_render.c
+@@ -1242,7 +1242,7 @@ size_t ass_outline_construct(void *key, void *value, void *priv)
+     case OUTLINE_GLYPH:
+         {
+             GlyphHashKey *k = &outline_key->u.glyph;
+-            ass_face_set_size(k->font->faces[k->face_index], k->size);
++            ass_font_set_size(k->font, k->face_index, k->size);
+             if (!ass_font_get_glyph(k->font, k->face_index, k->glyph_index,
+                                     render_priv->settings.hinting))
+                 return 1;
+diff --git a/libass/ass_shaper.c b/libass/ass_shaper.c
+index d733d5d0aeac7dd7888d66c3e3018b9d0d97c251..918a8b673ace415e6f548e4c2a8a95be57cc005d 100644
+--- a/libass/ass_shaper.c
++++ b/libass/ass_shaper.c
+@@ -241,7 +241,7 @@ size_t ass_face_size_metrics_construct(void *key, void *value, void *priv)
+
+     FT_Face face = k->font->faces[k->face_index];
+
+-    ass_face_set_size(face, k->size);
++    ass_font_set_size(k->font, k->face_index, k->size);
+
+     memcpy(v, &face->size->metrics, sizeof(FT_Size_Metrics));
+
+@@ -258,7 +258,7 @@ size_t ass_glyph_metrics_construct(void *key, void *value, void *priv)
+
+     FT_Face face = k->font->faces[k->face_index];
+
+-    ass_face_set_size(face, k->size);
++    ass_font_set_size(k->font, k->face_index, k->size);
+
+     if (FT_Load_Glyph(face, k->glyph_index, load_flags)) {
+         v->width = -1;
