@@ -16,7 +16,7 @@ fi
 unset CC CXX # meson wants these unset
 
 meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
-	-Dminimum=true -D{push,reader,sax1,iso8859x,pattern}=enabled
+	-Dminimum=true -D{push,reader,sax1,iso8859x,pattern,output}=enabled
 
 ninja -C $build -j$cores
 DESTDIR="$prefix_dir" ninja -C $build install
