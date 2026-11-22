@@ -1,170 +1,8 @@
-diff --git a/audio/out/ao_audiotrack.c b/audio/out/ao_audiotrack.c
-index 7f5c6ec1bb..1990938359 100644
---- a/audio/out/ao_audiotrack.c
-+++ b/audio/out/ao_audiotrack.c
-@@ -65,6 +65,7 @@ struct priv {
-     int64_t timestamp_fetched;
-     bool timestamp_set;
-     int timestamp_stable;
-+    int64_t resume_time; /* CLOCK_MONOTONIC of the last play() */
- 
-     uint32_t written_frames; /* requires uint32_t rollover semantics */
-     uint32_t playhead_pos;
-@@ -75,6 +76,7 @@ struct priv {
-     int chunksize;
-     int pending_bytes;
-     int pending_total;
-+    uint64_t generation; /* incremented by every flush of the pull thread */
-     uint64_t pcm_written;
-     uint64_t pcm_playhead;
-     uint64_t pcm_stop_playhead;
-@@ -477,6 +479,21 @@ static int AudioTrack_New(struct ao *ao)
-     return 0;
- }
- 
-+static int64_t monotonic_time_ns(void)
-+{
-+    struct timespec ts;
-+    if (clock_gettime(CLOCK_MONOTONIC, &ts))
-+        return 0;
-+    return MP_TIME_S_TO_NS(ts.tv_sec) + ts.tv_nsec;
-+}
-+
-+static void invalidate_timestamp(struct priv *p)
-+{
-+    p->timestamp_fetched = 0;
-+    p->timestamp_set = false;
-+    p->timestamp_stable = 0;
-+}
-+
- static int64_t AudioTrack_getPlaybackHeadPosition(struct ao *ao, double *elapsed)
- {
-     *elapsed = 0;
-@@ -504,7 +521,12 @@ static int64_t AudioTrack_getPlaybackHeadPosition(struct ao *ao, double *elapsed
- 
-         p->timestamp_fetched = now;
-         int64_t time1 = MP_JNI_GET_LONG(p->timestamp, AudioTimestamp.nanoTime);
--        if (MP_JNI_CALL_BOOL(p->audiotrack, AudioTrack.getTimestamp, p->timestamp)) {
-+        // After play(), Android returns the frame presented before the pause
-+        // until a new one is presented. Extrapolating from it would count the
-+        // pause, or the restart latency, as played.
-+        if (MP_JNI_CALL_BOOL(p->audiotrack, AudioTrack.getTimestamp, p->timestamp) &&
-+            MP_JNI_GET_LONG(p->timestamp, AudioTimestamp.nanoTime) >= p->resume_time)
-+        {
-             p->timestamp_set = true;
-             if (p->timestamp_stable < stable_count) {
-                 uint32_t fpos = 0xFFFFFFFFL & MP_JNI_GET_LONG(p->timestamp, AudioTimestamp.framePosition);
-@@ -730,8 +752,16 @@ static MP_THREAD_VOID ao_thread(void *arg)
-                 p->pending_bytes = bytes;
-             }
-             int offset = bytes - p->pending_bytes;
--            int ret = AudioTrack_write(ao, offset, p->pending_bytes,
--                                       AudioTrack.WRITE_BLOCKING);
-+            int len = p->pending_bytes;
-+            uint64_t generation = p->generation;
-+            // pause() interrupts a blocking write, but one that races with the
-+            // start of the write can leave it blocked until play(). Don't hold
-+            // the lock meanwhile, or set_pause() and reset() could wait forever.
-+            mp_mutex_unlock(&p->lock);
-+            int ret = AudioTrack_write(ao, offset, len, AudioTrack.WRITE_BLOCKING);
-+            mp_mutex_lock(&p->lock);
-+            if (generation != p->generation)
-+                continue; // flushed meanwhile, the rest of the chunk is stale
-             if (ret > 0) {
-                 p->pending_bytes -= ret;
-                 p->written_frames += (offset + ret) / ao->sstride -
-@@ -900,10 +930,18 @@ static int init(struct ao *ao)
-     };
-     static_assert(MP_ARRAY_SIZE(layout_map) == MP_ARRAY_SIZE(layouts), "");
-     if (p->format == AudioFormat.ENCODING_IEC61937) {
--        p->channel_config = AudioFormat.CHANNEL_OUT_STEREO;
--        // Android accepts an 8-channel IEC61937 carrier from API 31 onward.
--        if (BuildVersion.SDK_INT >= ANDROID_API_LEVEL_S && ao->channels.num == 8)
-+        // TrueHD and DTS-HD MA use an 8-channel carrier, which Android only
-+        // accepts from API 31 onward. Configured as stereo, it sends garbage.
-+        if (ao->channels.num == 2) {
-+            p->channel_config = AudioFormat.CHANNEL_OUT_STEREO;
-+        } else if (ao->channels.num == 8 && AudioFormat.CHANNEL_OUT_7POINT1_SURROUND &&
-+                   BuildVersion.SDK_INT >= ANDROID_API_LEVEL_S) {
-             p->channel_config = AudioFormat.CHANNEL_OUT_7POINT1_SURROUND;
-+        } else {
-+            MP_ERR(ao, "IEC61937 with %d channels is not supported%s\n",
-+                   ao->channels.num, ao->channels.num == 8 ? " before Android 12" : "");
-+            goto error;
-+        }
-     } else if (af_fmt_is_encoded(ao->format)) {
-         // The layout describes the compressed stream, not PCM to remix.
-         if (ao->channels.num < 1 || ao->channels.num >= MP_ARRAY_SIZE(layout_map))
-@@ -1032,6 +1070,7 @@ static void stop(struct ao *ao)
-     MP_JNI_EXCEPTION_LOG(ao);
- 
-     p->pending_bytes = 0;
-+    p->generation++;
-     p->playhead_offset = 0;
-     p->reset_pending = true;
-     p->written_frames = 0;
-@@ -1050,6 +1089,9 @@ static void start(struct ao *ao)
- 
-     JNIEnv *env = MP_JNI_GET_ENV(ao);
-     mp_mutex_lock(&p->lock);
-+    // Timestamps taken before play() describe the paused or flushed track.
-+    p->resume_time = monotonic_time_ns();
-+    invalidate_timestamp(p);
-     MP_JNI_CALL_VOID(p->audiotrack, AudioTrack.play);
-     MP_JNI_EXCEPTION_LOG(ao);
- 
-@@ -1057,6 +1099,27 @@ static void start(struct ao *ao)
-     mp_mutex_unlock(&p->lock);
- }
- 
-+// Pause without flushing. reset() would discard the queued audio, so the
-+// audio clock would jump ahead on resume and video frames would be dropped.
-+static bool pull_set_pause(struct ao *ao, bool paused)
-+{
-+    struct priv *p = ao->priv;
-+    if (!paused) {
-+        start(ao);
-+        return true;
-+    }
-+    if (!p->audiotrack)
-+        return false;
-+
-+    JNIEnv *env = MP_JNI_GET_ENV(ao);
-+    mp_mutex_lock(&p->lock);
-+    MP_JNI_CALL_VOID(p->audiotrack, AudioTrack.pause);
-+    MP_JNI_EXCEPTION_LOG(ao);
-+    invalidate_timestamp(p);
-+    mp_mutex_unlock(&p->lock);
-+    return true;
-+}
-+
- static void pcm_error(struct ao *ao, const char *operation, int error)
- {
-     struct priv *p = ao->priv;
-@@ -1116,6 +1179,10 @@ static bool pcm_set_pause(struct ao *ao, bool paused)
-     if (p->pcm_draining)
-         return true;
-     JNIEnv *env = MP_JNI_GET_ENV(ao);
-+    // Timestamps from before play() describe the paused track.
-+    if (!paused)
-+        p->resume_time = monotonic_time_ns();
-+    invalidate_timestamp(p);
-     MP_JNI_CALL_VOID(p->audiotrack, paused ? AudioTrack.pause : AudioTrack.play);
-     if (MP_JNI_EXCEPTION_LOG(ao) < 0) {
-         pcm_error(ao, paused ? "pause" : "play", AudioTrack.ERROR);
-@@ -1438,6 +1505,7 @@ static const struct ao_driver audio_out_audiotrack_pull = {
-     .uninit = uninit,
-     .reset = stop,
-     .start = start,
-+    .set_pause = pull_set_pause,
- };
- 
- const struct ao_driver audio_out_audiotrack = {
 diff --git a/player/command.c b/player/command.c
-index 6783247446..e80c9692dd 100644
+index 9eab98a..2857a91 100644
 --- a/player/command.c
 +++ b/player/command.c
-@@ -2049,7 +2049,9 @@ static int mp_property_audio_passthrough_failed(void *ctx, struct m_property *pr
+@@ -2066,7 +2066,9 @@ static int mp_property_audio_passthrough_failed(void *ctx, struct m_property *pr
      MPContext *mpctx = ctx;
      if (!mpctx->ao_chain)
          return M_PROPERTY_UNAVAILABLE;
@@ -176,18 +14,18 @@ index 6783247446..e80c9692dd 100644
  
  static int mp_property_audio_out_params(void *ctx, struct m_property *prop,
 diff --git a/video/out/vo.c b/video/out/vo.c
-index 80b8654359..f6fca418b6 100644
+index 93754ac..7fa800c 100644
 --- a/video/out/vo.c
 +++ b/video/out/vo.c
-@@ -178,6 +178,7 @@ struct vo_internal {
+@@ -197,6 +197,7 @@ struct vo_internal {
      int64_t delayed_count;
      int64_t drop_count;
      bool dropped_frame;             // the previous frame was dropped
 +    int64_t resume_until;           // no timing drops until then (unpause)
  
-     struct vo_frame *current_frame; // last frame queued to the VO
- 
-@@ -1164,6 +1165,9 @@ static bool render_frame(struct vo *vo)
+     // The last flips by flip count, for the presentation feedback. A backend
+     // reports a present up to the swapchain depth plus one flips back.
+@@ -1477,6 +1478,9 @@ static bool render_frame(struct vo *vo)
      // instead of just freezing the display forever.
      in->dropped_frame &= now - in->prev_vsync < MP_TIME_MS_TO_NS(100);
      in->dropped_frame &= in->hasframe_rendered;
@@ -197,7 +35,7 @@ index 80b8654359..f6fca418b6 100644
  
      // Setup parameters for the next time this frame is drawn. ("frame" is the
      // frame currently drawn, while in->current_frame is the potentially next.)
-@@ -1450,6 +1454,8 @@ void vo_set_paused(struct vo *vo, bool paused)
+@@ -1809,6 +1813,8 @@ void vo_set_paused(struct vo *vo, bool paused)
      mp_mutex_lock(&in->lock);
      if (in->paused != paused) {
          in->paused = paused;
