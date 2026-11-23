@@ -11,6 +11,10 @@ else
 	exit 255
 fi
 
+if ! git apply --reverse --check ../../patches/libass-background-radius.patch 2>/dev/null; then
+	git apply ../../patches/libass-background-radius.patch
+fi
+
 [ -f configure ] || ./autogen.sh
 
 asm_args=--enable-asm

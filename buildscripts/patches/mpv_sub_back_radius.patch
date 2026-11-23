@@ -1,0 +1,83 @@
+diff --git a/DOCS/man/options.rst b/DOCS/man/options.rst
+index dddff27f69..b97a663164 100644
+--- a/DOCS/man/options.rst
++++ b/DOCS/man/options.rst
+@@ -3151,6 +3151,7 @@ Subtitles
+       and the margin of the background box is determined by ``--sub-shadow-offset``.
+       The behavior of the outline is the same as the ``outline-and-shadow`` style.
+       This corresponds to ``BorderStyle=4``, which is a libass-specific extension.
++      ``--sub-back-radius`` rounds its corners.
+ 
+     Default: ``outline-and-shadow``.
+ 
+@@ -3164,6 +3165,17 @@ Subtitles
+           including stats and console
+         - ``--profile=box`` applies the ``background-box`` style to both subtitles and OSD
+ 
++``--sub-back-radius=<size>``
++    Corner radius of the box drawn by ``--sub-border-style=background-box``,
++    in scaled pixels (see ``--sub-font-size`` for details), like
++    ``--sub-shadow-offset``, which sets the margin of the box. The corners
++    are anti-aliased, and the radius is limited to half the box height.
++
++    Like ``--sub-line-spacing``, it does not apply to ASS subtitles with
++    ``--sub-ass-override=no``.
++
++    Default: 0 (square corners).
++
+ ``--sub-color=<color>``
+     Specify the color used for unstyled text subtitles.
+ 
+diff --git a/options/options.c b/options/options.c
+index a432414551..ad051d0680 100644
+--- a/options/options.c
++++ b/options/options.c
+@@ -319,6 +319,7 @@ const struct m_sub_options mp_subtitle_sub_opts = {
+         {"sub-scale-signs", OPT_BOOL(sub_scale_signs)},
+         {"sub-line-spacing", OPT_FLOAT(sub_line_spacing), M_RANGE(-1000, 1000)},
+         {"sub-ass-line-spacing", OPT_REPLACED("sub-line-spacing")},
++        {"sub-back-radius", OPT_FLOAT(sub_back_radius), M_RANGE(0, 1000)},
+         {"sub-use-margins", OPT_BOOL(sub_use_margins)},
+         {"sub-ass-force-margins", OPT_BOOL(ass_use_margins)},
+         {"sub-ass-vsfilter-color-compat", OPT_CHOICE(ass_vsfilter_color_compat,
+diff --git a/options/options.h b/options/options.h
+index 1f8e7cb093..205c1fa5af 100644
+--- a/options/options.h
++++ b/options/options.h
+@@ -115,6 +115,7 @@ struct mp_subtitle_opts {
+     bool sub_gray;
+     bool ass_enabled;
+     float sub_line_spacing;
++    float sub_back_radius;
+     bool ass_use_margins;
+     bool sub_use_margins;
+     int ass_vsfilter_color_compat;
+diff --git a/sub/sd_ass.c b/sub/sd_ass.c
+index c329b6169c..5cc1da4de7 100644
+--- a/sub/sd_ass.c
++++ b/sub/sd_ass.c
+@@ -546,6 +546,7 @@ static void configure_ass(struct sd *sd, struct mp_osd_res *dim,
+     bool set_use_margins = false;
+     float set_sub_pos = 0.0f;
+     float set_line_spacing = 0;
++    float set_back_radius = 0;
+     float set_font_scale = 1;
+     int set_hinting = 0;
+     bool set_scale_with_window = false;
+@@ -565,6 +566,7 @@ static void configure_ass(struct sd *sd, struct mp_osd_res *dim,
+     if (converted || shared_opts->ass_style_override[sd->order]) {
+         set_sub_pos = 100.0f - shared_opts->sub_pos[sd->order];
+         set_line_spacing = opts->sub_line_spacing;
++        set_back_radius = opts->sub_back_radius;
+         set_hinting = opts->sub_hinting;
+     }
+     if (total_override || shared_opts->ass_style_override[sd->order] == ASS_STYLE_OVERRIDE_SCALE) {
+@@ -614,6 +616,8 @@ static void configure_ass(struct sd *sd, struct mp_osd_res *dim,
+     ass_set_font_scale(priv, set_font_scale);
+     ass_set_hinting(priv, set_hinting);
+     ass_set_line_spacing(priv, set_line_spacing);
++    // In the scaled pixels of --sub-shadow-offset, which pads the same box.
++    ass_set_background_radius(priv, set_back_radius * track->PlayResY / 720.0);
+ #if LIBASS_VERSION >= 0x01600010
+     if (converted) {
+         ass_track_set_feature(track, ASS_FEATURE_WRAP_UNICODE, 1);
