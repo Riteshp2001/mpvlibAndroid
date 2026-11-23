@@ -34,6 +34,7 @@ This library brings the full power of mpv to Android — play any video, generat
 - Vulkan rendering via libplacebo + shaderc
 - GPU shader cache support
 - Subtitle rendering with libass + HarfBuzz + FriBidi, with fontconfig fallback to the Android system fonts
+- Rounded subtitle background boxes (`--sub-back-radius` with `--sub-border-style=background-box`)
 - AV1 decoding via dav1d
 
 ### ⚡ Modern Android API

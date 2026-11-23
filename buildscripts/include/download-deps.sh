@@ -159,6 +159,9 @@ fi
 
 # libass - use GitHub mirror
 [ ! -d libass ] && git clone https://github.com/libass/libass
+if ! git -C libass apply --reverse --check ../../patches/libass-background-radius.patch 2>/dev/null; then
+	git -C libass apply ../../patches/libass-background-radius.patch
+fi
 
 # luajit
 if [ ! -d luajit ]; then

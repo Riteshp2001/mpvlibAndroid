@@ -33,6 +33,10 @@ if ! git apply --reverse --check ../../patches/mpv_android_pause_passthrough.pat
 	git apply ../../patches/mpv_android_pause_passthrough.patch
 fi
 
+if ! git apply --reverse --check ../../patches/mpv_sub_back_radius.patch 2>/dev/null; then
+	git apply ../../patches/mpv_sub_back_radius.patch
+fi
+
 # Android provides Vulkan, but no pkgconfig file.
 mkdir -p "$prefix_dir"/lib/pkgconfig
 cat >"$prefix_dir"/lib/pkgconfig/vulkan.pc <<END
