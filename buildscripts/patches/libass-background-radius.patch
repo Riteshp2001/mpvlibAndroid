@@ -1,0 +1,106 @@
+diff --git a/libass/ass.h b/libass/ass.h
+index 851ca7c..9e1298c 100644
+--- a/libass/ass.h
++++ b/libass/ass.h
+@@ -524,6 +524,15 @@ void ass_set_line_spacing(ASS_Renderer *priv, double line_spacing);
+  */
+ void ass_set_line_position(ASS_Renderer *priv, double line_position);
+ 
++/**
++ * \brief Set the corner radius of BorderStyle 4 background boxes.
++ * The radius is in script pixels and scales like Shadow, which sets the
++ * padding of the box. It is limited to half the box width or height.
++ * \param priv renderer handle
++ * \param radius corner radius, 0 for square corners (default)
++ */
++void ass_set_background_radius(ASS_Renderer *priv, double radius);
++
+ /**
+  * \brief Get the list of available font providers. The output array
+  * is allocated with malloc and can be released with free(). If an
+diff --git a/libass/ass_render.c b/libass/ass_render.c
+index ff51510..9a3dd2e 100644
+--- a/libass/ass_render.c
++++ b/libass/ass_render.c
+@@ -2756,6 +2756,27 @@ size_t ass_composite_construct(void *key, void *value, void *priv)
+         bitmap_size(&v->bm) + bitmap_size(&v->bm_o) + bitmap_size(&v->bm_s);
+ }
+ 
++// Fill a w x h box mask, with corners rounded to radius r and anti-aliased
++// over one pixel.
++static void fill_background_mask(uint8_t *buf, int w, int h, double r)
++{
++    memset(buf, 0xFF, (size_t) w * h);
++    r = FFMIN(r, FFMIN(w, h) / 2.0);
++    int n = (int) ceil(r);
++    for (int y = 0; y < n; y++) {
++        double dy = FFMAX(r - (y + 0.5), 0);
++        uint8_t *top = buf + (size_t) y * w;
++        uint8_t *bottom = buf + (size_t) (h - 1 - y) * w;
++        for (int x = 0; x < n; x++) {
++            double dx = FFMAX(r - (x + 0.5), 0);
++            double cover = FFMINMAX(r + 0.5 - sqrt(dx * dx + dy * dy), 0, 1);
++            uint8_t a = lround(cover * 255);
++            top[x] = top[w - 1 - x] = a;
++            bottom[x] = bottom[w - 1 - x] = a;
++        }
++    }
++}
++
+ static void add_background(RenderContext *state, EventImages *event_images)
+ {
+     ASS_Renderer *render_priv = state->renderer;
+@@ -2778,7 +2799,8 @@ static void add_background(RenderContext *state, EventImages *event_images)
+     void *nbuffer = ass_aligned_alloc(1, w * h, false);
+     if (!nbuffer)
+         return;
+-    memset(nbuffer, 0xFF, w * h);
++    fill_background_mask(nbuffer, w, h, render_priv->settings.background_radius *
++                                        state->border_scale_y);
+     uint32_t clr = state->c[3];
+     ass_apply_fade(&clr, state->fade);
+     ASS_Image *img = my_draw_bitmap(nbuffer, w, h, w, left, top,
+diff --git a/libass/ass_render.h b/libass/ass_render.h
+index e1eb7d2..6fb320b 100644
+--- a/libass/ass_render.h
++++ b/libass/ass_render.h
+@@ -64,6 +64,7 @@ typedef struct {
+     double font_size_coeff;     // font size multiplier
+     double line_spacing;        // additional line spacing (in frame pixels)
+     double line_position;       // vertical position for subtitles, 0-100 (0 = no change)
++    double background_radius;   // BorderStyle 4 box corner radius (in script pixels)
+     int top_margin;             // height of top margin. Video frame is shifted down by top_margin.
+     int bottom_margin;          // height of bottom margin. (frame_height - top_margin - bottom_margin) is original video height.
+     int left_margin;
+diff --git a/libass/ass_render_api.c b/libass/ass_render_api.c
+index ee1620a..3447986 100644
+--- a/libass/ass_render_api.c
++++ b/libass/ass_render_api.c
+@@ -145,6 +145,15 @@ void ass_set_line_position(ASS_Renderer *priv, double line_position)
+     }
+ }
+ 
++void ass_set_background_radius(ASS_Renderer *priv, double radius)
++{
++    radius = FFMAX(radius, 0);
++    if (priv->settings.background_radius != radius) {
++        priv->settings.background_radius = radius;
++        ass_reconfigure(priv);
++    }
++}
++
+ void ass_set_fonts(ASS_Renderer *priv, const char *default_font,
+                    const char *default_family, int dfp,
+                    const char *config, int update)
+diff --git a/libass/libass.sym b/libass/libass.sym
+index 4cc6215..f8c0998 100644
+--- a/libass/libass.sym
++++ b/libass/libass.sym
+@@ -39,6 +39,7 @@ ass_set_cache_limits
+ ass_flush_events
+ ass_set_shaper
+ ass_set_line_position
++ass_set_background_radius
+ ass_set_pixel_aspect
+ ass_set_selective_style_override_enabled
+ ass_set_selective_style_override
