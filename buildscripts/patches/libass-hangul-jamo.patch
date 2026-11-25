@@ -1,0 +1,72 @@
+diff --git a/libass/ass_parse.c b/libass/ass_parse.c
+index e85fc5e..4698715 100644
+--- a/libass/ass_parse.c
++++ b/libass/ass_parse.c
+@@ -1107,6 +1107,59 @@ void ass_process_karaoke_effects(RenderContext *state)
+ }
+ 
+ 
++#define HANGUL_S_BASE  0xAC00
++#define HANGUL_L_BASE  0x1100
++#define HANGUL_V_BASE  0x1161
++#define HANGUL_T_BASE  0x11A7
++#define HANGUL_L_COUNT 19
++#define HANGUL_V_COUNT 21
++#define HANGUL_T_COUNT 28
++#define HANGUL_S_COUNT (HANGUL_L_COUNT * HANGUL_V_COUNT * HANGUL_T_COUNT)
++
++/**
++ * \brief Compose conjoining Hangul jamo into a precomposed syllable
++ * \param chr the character just read
++ * \param str pointer to the text after chr, advanced past composed jamo
++ * \return the precomposed syllable, or chr if nothing composes
++ *
++ * Text saved as NFD, as macOS does, stores each Hangul syllable as separate
++ * leading consonant, vowel and trailing consonant jamo. The shaper only joins
++ * them when one font run holds all of them and the font supports it; font
++ * fallback and letter spacing split the run, so the jamo were drawn apart
++ * as single letters. Compose the modern jamo like Unicode NFC does, so
++ * the font draws its precomposed syllable. Old Hangul jamo outside the
++ * composable ranges are left to the shaper.
++ */
++static unsigned compose_hangul(unsigned chr, char **str)
++{
++    char *p = *str;
++    char *q = p;
++    unsigned next;
++
++    if (chr - HANGUL_L_BASE < HANGUL_L_COUNT) {
++        next = ass_utf8_get_char(&q);
++        if (next - HANGUL_V_BASE >= HANGUL_V_COUNT)
++            return chr;
++        chr = HANGUL_S_BASE + ((chr - HANGUL_L_BASE) * HANGUL_V_COUNT +
++                               (next - HANGUL_V_BASE)) * HANGUL_T_COUNT;
++        p = q;
++    } else if (chr - HANGUL_S_BASE >= HANGUL_S_COUNT ||
++               (chr - HANGUL_S_BASE) % HANGUL_T_COUNT) {
++        return chr;
++    }
++
++    // chr is an LV syllable here, which can take a trailing consonant
++    q = p;
++    next = ass_utf8_get_char(&q);
++    if (next - (HANGUL_T_BASE + 1) < HANGUL_T_COUNT - 1) {
++        chr += next - HANGUL_T_BASE;
++        p = q;
++    }
++
++    *str = p;
++    return chr;
++}
++
+ /**
+  * \brief Get next ucs4 char from string, parsing UTF-8 and escapes
+  * \param str string pointer
+@@ -1147,6 +1200,7 @@ unsigned ass_get_next_char(RenderContext *state, char **str)
+         }
+     }
+     chr = ass_utf8_get_char((char **) &p);
++    chr = compose_hangul(chr, &p);
+     *str = p;
+     return chr;
+ }

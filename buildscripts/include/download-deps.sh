@@ -315,7 +315,8 @@ fi
 for libass_patch in ../patches/libass-font-size-em.patch \
 	../patches/libass-line-height.patch \
 	../patches/libass-font-file.patch \
-	../patches/libass-background-radius.patch; do
+	../patches/libass-background-radius.patch \
+	../patches/libass-hangul-jamo.patch; do
 	if patch --batch --forward --fuzz=0 --dry-run -d libass -p1 < "$libass_patch" >/dev/null 2>&1; then
 		patch --batch --forward --fuzz=0 -d libass -p1 < "$libass_patch"
 	elif ! patch --batch --reverse --fuzz=0 --dry-run -d libass -p1 < "$libass_patch" >/dev/null 2>&1; then
