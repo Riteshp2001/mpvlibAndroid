@@ -162,6 +162,9 @@ fi
 if ! git -C libass apply --reverse --check ../../patches/libass-background-radius.patch 2>/dev/null; then
 	git -C libass apply ../../patches/libass-background-radius.patch
 fi
+if ! git -C libass apply --reverse --check ../../patches/libass-hangul-jamo.patch 2>/dev/null; then
+	git -C libass apply ../../patches/libass-hangul-jamo.patch
+fi
 
 # luajit
 if [ ! -d luajit ]; then

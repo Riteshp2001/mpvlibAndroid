@@ -15,6 +15,10 @@ if ! git apply --reverse --check ../../patches/libass-background-radius.patch 2>
 	git apply ../../patches/libass-background-radius.patch
 fi
 
+if ! git apply --reverse --check ../../patches/libass-hangul-jamo.patch 2>/dev/null; then
+	git apply ../../patches/libass-hangul-jamo.patch
+fi
+
 [ -f configure ] || ./autogen.sh
 
 asm_args=--enable-asm
