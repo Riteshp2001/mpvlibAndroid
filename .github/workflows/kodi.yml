@@ -25,10 +25,13 @@ jobs:
       contents: read
 
     env:
+      # Maven Central rate-limits shared runner addresses (HTTP 429); retry with backoff.
       GRADLE_OPTS: >-
         -Xmx4G
         -Dorg.gradle.daemon=false
         -Dorg.gradle.configureondemand=true
+        -Dorg.gradle.internal.repository.max.retries=8
+        -Dorg.gradle.internal.repository.initial.backoff=2000
 
     steps:
       - name: Checkout repository
