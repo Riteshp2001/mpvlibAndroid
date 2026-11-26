@@ -50,10 +50,10 @@ printf '%s\n' \
 	"# This file is automatically written by the build scripts, and read using Gradle" \
 	"ndkVersion=$v_ndk_n" "ndkRoot=$ANDROID_NDK_ROOT" >ndk.properties
 
-targets=(assembleDebug)
+targets=(:app:assembleDebug)
 if [ -z "$DONT_BUILD_RELEASE" ]; then
-	targets+=(assembleRelease)
-	[ -n "$BUNDLE" ] && targets+=(bundleRelease)
+	targets+=(:app:assembleRelease)
+	[ -n "$BUNDLE" ] && targets+=(:app:bundleRelease)
 fi
 ./gradlew "${targets[@]}"
 
