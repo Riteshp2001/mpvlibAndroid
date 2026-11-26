@@ -53,6 +53,23 @@ Requires Python 3 and Git. Optional Gradle properties:
 The `kodi` workflow builds the AAR on the `kodi` branch. Pushing a `kodi-v<aar.version>` tag publishes
 `mpvlib-kodi-<aar.version>.aar` as a prerelease (these tags don't start the `v*.*.*` release workflow).
 
+### Kodi built from source
+
+Releases repackage the official binaries. To change Kodi itself, build it from source and package
+that APK instead:
+
+```sh
+JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ANDROID_HOME=$HOME/Android/Sdk \
+  kodi/scripts/build-kodi-source.sh x86 ~/kodi-android-build
+./gradlew :kodi:assembleRelease -PkodiAbis=x86 \
+  -PkodiApk.x86=$HOME/kodi-android-build/xbmc-21.3-Omega/kodiapp-x86-release.apk
+```
+
+`build-kodi-source.sh` follows Kodi's `docs/README.Android.md` for the pinned tag: NDK r21e, release
+depends, the `peripheral.joystick` add-on, Kodi, then `make apk`. It applies `kodi/patches/*.patch`
+to a fresh checkout and fetches the depends tarballs from several Kodi mirrors in parallel
+(`prefetch_kodi_tarballs.py`). Building one ABI takes about an hour on 6 cores and about 10 GB of disk.
+
 ## Using it in an app
 
 1. Depend on the AAR and on `androidx.tvprovider:tvprovider` and `com.google.code.gson:gson`. AARs
