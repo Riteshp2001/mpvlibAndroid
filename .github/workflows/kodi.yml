@@ -1,0 +1,146 @@
+name: kodi
+
+on:
+  push:
+    branches:
+      - kodi
+    tags:
+      - "kodi-v*"
+  pull_request:
+    paths:
+      - "kodi/**"
+      - ".github/workflows/kodi.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: kodi-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build mpvlib-kodi AAR
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: read
+
+    env:
+      GRADLE_OPTS: >-
+        -Xmx4G
+        -Dorg.gradle.daemon=false
+        -Dorg.gradle.configureondemand=true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v6
+        with:
+          java-version: "17"
+          distribution: temurin
+          cache: gradle
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Restore Kodi inputs cache
+        id: kodi-inputs
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/mpvlib-kodi
+          key: kodi-inputs-${{ hashFiles('kodi/kodi.properties') }}
+
+      - name: Build AAR
+        run: ./gradlew :kodi:assembleRelease --stacktrace
+
+      - name: Save Kodi inputs cache
+        if: steps.kodi-inputs.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cache/mpvlib-kodi
+          key: kodi-inputs-${{ hashFiles('kodi/kodi.properties') }}
+
+      - name: Stage AAR
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^aar.version=//p' kodi/kodi.properties)"
+          aar="dist/mpvlib-kodi-${version}.aar"
+          mkdir -p dist
+          cp kodi/build/outputs/aar/kodi-release.aar "$aar"
+          for abi in arm64-v8a armeabi-v7a x86; do
+            unzip -l "$aar" "jni/${abi}/libkodi.so" > /dev/null
+          done
+          unzip -l "$aar" assets/kodi/kodi-assets.zip > /dev/null
+          unzip -p "$aar" assets/kodi/SOURCES.txt > dist/SOURCES.txt
+          (cd dist && sha256sum "mpvlib-kodi-${version}.aar" > "mpvlib-kodi-${version}.aar.sha256")
+          echo "VERSION_NAME=${version}" >> "$GITHUB_ENV"
+
+      - name: Upload AAR artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: mpvlib-kodi-${{ env.VERSION_NAME }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: Publish mpvlib-kodi prerelease
+    if: startsWith(github.ref, 'refs/tags/kodi-v')
+    needs: build
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Resolve version
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^aar.version=//p' kodi/kodi.properties)"
+          if [[ "${GITHUB_REF_NAME}" != "kodi-v${version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match aar.version ${version} (expected kodi-v${version})."
+            exit 1
+          fi
+          echo "VERSION_NAME=${version}" >> "$GITHUB_ENV"
+
+      - name: Download AAR
+        uses: actions/download-artifact@v8
+        with:
+          name: mpvlib-kodi-${{ env.VERSION_NAME }}
+          path: dist
+
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          {
+            echo "# mpvlib-kodi ${VERSION_NAME}"
+            echo ""
+            echo "Kodi's engine packaged as an Android library for apps that embed it in a separate \`:kodi\` process."
+            echo "Native libraries and assets are repackaged unchanged from the official Kodi APKs; see SOURCES.txt."
+            echo ""
+            echo "ABIs: \`arm64-v8a\`, \`armeabi-v7a\`, \`x86\`. Kodi is licensed GPL-2.0-or-later; its source is available at"
+            echo "https://github.com/xbmc/xbmc. Kodi® is a registered trademark of the XBMC Foundation; this package is not"
+            echo "endorsed by the XBMC Foundation."
+            echo ""
+            echo '```text'
+            cat dist/SOURCES.txt
+            cat dist/*.sha256
+            echo '```'
+          } > dist/release-notes.md
+
+      - name: Create GitHub prerelease
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: mpvlib-kodi ${{ env.VERSION_NAME }}
+          body_path: dist/release-notes.md
+          prerelease: true
+          files: |
+            dist/*.aar
+            dist/*.sha256
+            dist/SOURCES.txt
