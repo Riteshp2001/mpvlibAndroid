@@ -62,13 +62,16 @@ that APK instead:
 JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ANDROID_HOME=$HOME/Android/Sdk \
   kodi/scripts/build-kodi-source.sh x86 ~/kodi-android-build
 ./gradlew :kodi:assembleRelease -PkodiAbis=x86 \
-  -PkodiApk.x86=$HOME/kodi-android-build/xbmc-21.3-Omega/kodiapp-x86-release.apk
+  -PkodiApk.x86=$HOME/kodi-android-build/x86/xbmc/kodiapp-x86-release.apk
 ```
 
 `build-kodi-source.sh` follows Kodi's `docs/README.Android.md` for the pinned tag: NDK r21e, release
-depends, the `peripheral.joystick` add-on, Kodi, then `make apk`. It applies `kodi/patches/*.patch`
-to a fresh checkout and fetches the depends tarballs from several Kodi mirrors in parallel
-(`prefetch_kodi_tarballs.py`). Building one ABI takes about an hour on 6 cores and about 10 GB of disk.
+depends, the `peripheral.joystick` add-on, Kodi, then `make apk`. Each ABI gets its own checkout under
+the work directory, with `kodi/patches/*.patch` applied. Completed steps are skipped when the script
+runs again, so it resumes after a failure. The depends tarballs come from several Kodi mirrors in
+parallel (`prefetch_kodi_tarballs.py`) and Gradle is downloaded with retries. Building one ABI takes
+about an hour on 6 cores and about 10 GB of disk; its `libkodi.so` matches the official one (NDK r21e,
+the same libraries).
 
 ## Using it in an app
 

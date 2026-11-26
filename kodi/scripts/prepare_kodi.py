@@ -391,8 +391,9 @@ def build_assets(apk, out_assets, kodi_root, provenance):
             if not name.startswith("assets/") or name.endswith("/"):
                 continue
             data = src.read(info)
-            # One archive serves every ABI: the official per-ABI builds differ only in the
-            # binary add-ons' <platform> tag, and "android" matches all Android ABIs.
+            # One archive serves every ABI. The official per-ABI builds differ only in the binary
+            # add-ons' <platform> tag ("android" matches all ABIs) and in x86's unused egg stubs
+            # for its two extra Cryptodome modules, which Kodi loads by library name.
             if name.endswith("/addon.xml") and PLATFORM_TAG.search(data):
                 data = PLATFORM_TAG.sub(b"<platform>android</platform>", data)
                 retagged.append(name)

@@ -7,7 +7,9 @@
 #
 # Needs the host packages listed in README.Android.md, ANDROID_HOME (the NDK the README pins is
 # installed with sdkmanager when missing) and JAVA_HOME pointing to JDK 17 for Kodi's Gradle 8.3.
-# Patches in kodi/patches/*.patch, if any, are applied to the Kodi checkout first.
+# Each ABI gets its own checkout under <work dir>/<abi>; patches in kodi/patches/*.patch are
+# applied to it. Completed steps are skipped when the script runs again, so it resumes after a
+# failure; delete <work dir>/<abi> to start over.
 set -euo pipefail
 
 ABI=${1:?usage: build-kodi-source.sh <x86|arm64-v8a|armeabi-v7a> [work dir] [make jobs]}
@@ -25,11 +27,12 @@ esac
 
 prop() { sed -n "s/^$1=//p" "$MODULE/kodi.properties"; }
 TAG=$(prop kodi.tag)
-SRC=$WORK/xbmc-$TAG
 TARBALLS=$WORK/tarballs
-LOGS=$WORK/logs
-BUILD_DIR=$WORK/build-$ABI
-mkdir -p "$TARBALLS" "$LOGS"
+SRC=$WORK/$ABI/xbmc
+BUILD_DIR=$WORK/$ABI/build
+LOGS=$WORK/$ABI/logs
+STAMPS=$WORK/$ABI/stamps
+mkdir -p "$TARBALLS" "$LOGS" "$STAMPS"
 
 : "${ANDROID_HOME:?set ANDROID_HOME to the Android SDK}"
 : "${JAVA_HOME:?set JAVA_HOME to JDK 17}"
@@ -48,41 +51,82 @@ export KODI_ANDROID_KEY_PASSWORD=${KODI_ANDROID_KEY_PASSWORD:-android}
 if [ ! -f "$KODI_ANDROID_STORE_FILE" ]; then
   "$JAVA_HOME/bin/keytool" -genkey -keystore "$KODI_ANDROID_STORE_FILE" -alias "$KODI_ANDROID_KEY_ALIAS" \
     -dname "CN=Android Debug,O=Android,C=US" -keypass "$KODI_ANDROID_KEY_PASSWORD" \
-    -storepass "$KODI_ANDROID_STORE_PASSWORD" -keyalg RSA -keysize 2048 -validity 10000 > /dev/null
+    -storepass "$KODI_ANDROID_STORE_PASSWORD" -keyalg RSA -keysize 2048 -validity 10000 > /dev/null 2>&1
 fi
 export ANDROID_HOME ANDROID_SDK_ROOT=$ANDROID_HOME JAVA_HOME
 unset CC CXX CFLAGS CXXFLAGS CPPFLAGS LDFLAGS PKG_CONFIG_PATH
 
-step() {
+run() {
   local name=$1 t0
   shift
   t0=$(date +%s)
   echo "[$(date -Iseconds)] $ABI: $name"
-  if ! "$@" > "$LOGS/$ABI-$name.log" 2>&1; then
-    echo "$ABI: $name failed after $(( $(date +%s) - t0 ))s; see $LOGS/$ABI-$name.log" >&2
-    tail -20 "$LOGS/$ABI-$name.log" >&2
+  if ! "$@" > "$LOGS/$name.log" 2>&1; then
+    echo "$ABI: $name failed after $(( $(date +%s) - t0 ))s; see $LOGS/$name.log" >&2
+    tail -20 "$LOGS/$name.log" >&2
     exit 1
   fi
 }
 
-if [ ! -d "$SRC/.git" ]; then
-  step clone git -c advice.detachedHead=false clone --depth 1 --branch "$TAG" "$(prop kodi.git)" "$SRC"
+# Like run, but skipped once it has succeeded.
+step() {
+  if [ -e "$STAMPS/$1" ]; then
+    echo "$ABI: $1 already done"
+    return
+  fi
+  run "$@"
+  touch "$STAMPS/$1"
+}
+
+# run calls these in a condition, where set -e does not apply: they return on the first failure.
+clone() {
+  local patch
+  rm -rf "$SRC" || return
+  git -c advice.detachedHead=false clone --depth 1 --branch "$TAG" "$(prop kodi.git)" "$SRC" || return
   for patch in "$MODULE"/patches/*.patch; do
     [ -e "$patch" ] || continue
-    step "patch-$(basename "$patch" .patch)" git -C "$SRC" apply "$patch"
+    echo "applying $(basename "$patch")"
+    git -C "$SRC" apply "$patch" || return
   done
-fi
+}
 
-step prefetch python3 "$MODULE/scripts/prefetch_kodi_tarballs.py" "$SRC/tools/depends" "$TARBALLS"
-cd "$SRC/tools/depends"
-step depends-bootstrap ./bootstrap
-step depends-configure ./configure --with-tarballs="$TARBALLS" --host="$HOST" \
-  --with-sdk-path="$ANDROID_HOME" --with-ndk-path="$NDK" --prefix="$WORK/xbmc-depends" --enable-debug=no
-step depends make -j"$JOBS"
+configure_depends() (
+  cd "$SRC/tools/depends" &&
+    ./bootstrap &&
+    ./configure --with-tarballs="$TARBALLS" --host="$HOST" --with-sdk-path="$ANDROID_HOME" \
+      --with-ndk-path="$NDK" --prefix="$WORK/$ABI/depends" --enable-debug=no
+)
+
+# The Gradle wrapper gives up after a 10 s network timeout. Put the distribution that Kodi's
+# packaging uses where the wrapper looks for it, downloading it with retries.
+fetch_gradle() {
+  local url name dir
+  url=$(sed -n 's/^distributionUrl=//p' "$SRC/tools/android/packaging/gradle/wrapper/gradle-wrapper.properties" |
+    sed 's/\\:/:/g')
+  name=$(basename "$url" .zip)
+  dir=${GRADLE_USER_HOME:-$HOME/.gradle}/wrapper/dists/$name/$(python3 -c '
+import hashlib, sys
+n, digits, out = int(hashlib.md5(sys.argv[1].encode()).hexdigest(), 16), "0123456789abcdefghijklmnopqrstuvwxyz", ""
+while n:
+    n, r = divmod(n, 36)
+    out = digits[r] + out
+print(out)' "$url")
+  if [ -e "$dir/$name.zip.ok" ] || [ -s "$dir/$name.zip" ]; then
+    return
+  fi
+  mkdir -p "$dir" &&
+    curl -fsSL --retry 10 --retry-connrefused --connect-timeout 15 -o "$dir/$name.zip.part" "$url" &&
+    mv "$dir/$name.zip.part" "$dir/$name.zip"
+}
+
+step clone clone
+run prefetch python3 "$MODULE/scripts/prefetch_kodi_tarballs.py" "$SRC/tools/depends" "$TARBALLS"
+step configure configure_depends
+step depends make -C "$SRC/tools/depends" -j"$JOBS"
 # The official APKs ship this binary add-on only.
-step binary-addons make -j"$JOBS" -C target/binary-addons ADDONS="peripheral.joystick"
-step cmake make -C target/cmakebuildsys BUILD_DIR="$BUILD_DIR"
-cd "$BUILD_DIR"
-step kodi make -j"$JOBS"
-step apk make apk
+step binary-addons make -C "$SRC/tools/depends/target/binary-addons" -j"$JOBS" ADDONS="peripheral.joystick"
+step cmake make -C "$SRC/tools/depends/target/cmakebuildsys" BUILD_DIR="$BUILD_DIR"
+step kodi make -C "$BUILD_DIR" -j"$JOBS"
+run gradle fetch_gradle
+run apk make -C "$BUILD_DIR" apk
 ls -1 "$SRC"/kodiapp-*-release.apk
