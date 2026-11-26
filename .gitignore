@@ -10,3 +10,4 @@ build
 local.properties
 ndk.properties
 *~
+__pycache__

@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Embedded Kodi. Every component runs in the host application's ":kodi" process because
+  libkodi.so owns its process: it runs its own event loop and calls exit(0) when Kodi quits.
+  Components are not exported; the host starts org.xbmc.kodi.Splash with an explicit intent.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Splash requests WRITE_EXTERNAL_STORAGE up to API 29, READ_EXTERNAL_STORAGE on Android TV
+         API 30-32 and all-files access otherwise. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+
+    <uses-feature
+        android:name="android.hardware.bluetooth"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.screen.landscape"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.touchscreen.multitouch"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.type.television"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.usb.host"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.wifi"
+        android:required="false" />
+    <uses-feature
+        android:name="android.software.leanback"
+        android:required="false" />
+
+    <application>
+        <!-- Entry point: extracts Kodi's assets on first run, checks storage access, starts Main. -->
+        <activity
+            android:name="org.xbmc.kodi.Splash"
+            android:configChanges="orientation|keyboard|keyboardHidden|navigation|touchscreen|screenLayout|screenSize|smallestScreenSize|colorMode"
+            android:enableOnBackInvokedCallback="false"
+            android:exported="false"
+            android:finishOnTaskLaunch="true"
+            android:icon="@drawable/kodi_ic_launcher"
+            android:label="@string/kodi_app_name"
+            android:launchMode="singleInstance"
+            android:process=":kodi"
+            android:screenOrientation="sensorLandscape"
+            android:taskAffinity="${applicationId}.kodi"
+            android:theme="@style/kodi_AppTheme" />
+
+        <!-- NativeActivity hosting libkodi.so. Kodi handles KEYCODE_BACK itself. -->
+        <activity
+            android:name="org.xbmc.kodi.Main"
+            android:configChanges="orientation|keyboard|keyboardHidden|navigation|touchscreen|screenLayout|screenSize|smallestScreenSize|colorMode"
+            android:enableOnBackInvokedCallback="false"
+            android:exported="false"
+            android:finishOnTaskLaunch="true"
+            android:icon="@drawable/kodi_ic_launcher"
+            android:label="@string/kodi_app_name"
+            android:launchMode="singleInstance"
+            android:process=":kodi"
+            android:screenOrientation="sensorLandscape"
+            android:taskAffinity="${applicationId}.kodi"
+            android:theme="@style/kodi_AppTheme">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="kodi" />
+        </activity>
+
+        <receiver
+            android:name="org.xbmc.kodi.XBMCBroadcastReceiver"
+            android:exported="false"
+            android:process=":kodi">
+            <intent-filter>
+                <action android:name="android.intent.action.DREAMING_STOPPED" />
+                <action android:name="android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED" />
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Authorities must match KodiHost.authorityRoot(). -->
+        <provider
+            android:name="org.xbmc.kodi.content.XBMCMediaContentProvider"
+            android:authorities="${applicationId}.kodi.media"
+            android:exported="false"
+            android:process=":kodi" />
+        <provider
+            android:name="org.xbmc.kodi.content.XBMCFileContentProvider"
+            android:authorities="${applicationId}.kodi.file"
+            android:exported="false"
+            android:process=":kodi" />
+        <provider
+            android:name="org.xbmc.kodi.content.XBMCYTDLContentProvider"
+            android:authorities="${applicationId}.kodi.ytdl"
+            android:exported="false"
+            android:process=":kodi" />
+
+        <!-- Android TV home-screen channels; Main schedules these on Google TV launchers. -->
+        <service
+            android:name="org.xbmc.kodi.channels.SyncChannelJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:process=":kodi" />
+        <service
+            android:name="org.xbmc.kodi.channels.SyncProgramsJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:process=":kodi" />
+    </application>
+
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <!-- Kodi lists launchable apps in its "Android apps" source. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+        </intent>
+    </queries>
+
+</manifest>

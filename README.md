@@ -102,6 +102,15 @@ sudo apt install openjdk-17-jdk ninja-build cmake autoconf automake \
 
 Output: `app/build/outputs/aar/app-release.aar`
 
+### Embedded Kodi (experimental, `kodi` branch)
+
+The `kodi` module packages Kodi 21.3's Android engine as a separate `mpvlib-kodi` AAR that runs Kodi in
+the host app's `:kodi` process. See [kodi/README.md](kodi/README.md).
+
+```bash
+./gradlew :kodi:assembleRelease    # kodi/build/outputs/aar/kodi-release.aar
+```
+
 ## Supported ABIs
 
 - `arm64-v8a` (64-bit ARM)
