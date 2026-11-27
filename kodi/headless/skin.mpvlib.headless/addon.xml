@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Skin of the headless Kodi engine: it draws nothing but the video layer and subtitles.
+     Missing window files are intended; Kodi cannot show those windows, and modal dialogs
+     without a file are closed (cancelled) immediately. -->
+<addon id="skin.mpvlib.headless" version="1.0.0" name="Headless" provider-name="mpvlibAndroid">
+  <requires>
+    <import addon="xbmc.gui" version="5.17.0"/>
+  </requires>
+  <extension point="xbmc.gui.skin" debugging="false">
+    <res width="1920" height="1080" aspect="16:9" default="true" folder="xml" />
+  </extension>
+  <extension point="xbmc.addon.metadata">
+    <summary lang="en_GB">No user interface: playback is controlled by the host application.</summary>
+    <platform>all</platform>
+    <license>GPL-2.0-or-later</license>
+  </extension>
+</addon>

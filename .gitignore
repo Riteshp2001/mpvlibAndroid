@@ -11,3 +11,4 @@ local.properties
 ndk.properties
 *~
 __pycache__
+.cxx

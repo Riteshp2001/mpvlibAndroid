@@ -24,7 +24,7 @@ public final class KodiHost
 
   /** Kodi's assets, repackaged as one archive so they cannot collide with the host's assets. */
   public static final String ASSETS_ZIP = "kodi/kodi-assets.zip";
-  static final String ASSETS_INFO = "kodi/kodi-assets.properties";
+  public static final String ASSETS_INFO = "kodi/kodi-assets.properties";
 
   private static String sProcessName;
 
@@ -50,19 +50,36 @@ public final class KodiHost
   }
 
   /** Number of entries in {@link #ASSETS_ZIP}, used for the first-run progress bar. */
-  static int assetEntryCount(Context context)
+  public static int assetEntryCount(Context context)
+  {
+    try
+    {
+      return Integer.parseInt(assetInfo(context).getProperty("entries", "1"));
+    }
+    catch (NumberFormatException e)
+    {
+      return 1;
+    }
+  }
+
+  /** SHA-256 of {@link #ASSETS_ZIP}, identifying the extracted assets. */
+  public static String assetChecksum(Context context)
+  {
+    return assetInfo(context).getProperty("sha256", "");
+  }
+
+  private static Properties assetInfo(Context context)
   {
     Properties info = new Properties();
     try (InputStream in = context.getAssets().open(ASSETS_INFO))
     {
       info.load(in);
-      return Integer.parseInt(info.getProperty("entries", "1"));
     }
-    catch (IOException | NumberFormatException e)
+    catch (IOException e)
     {
       Log.w(TAG, "KodiHost: cannot read " + ASSETS_INFO, e);
-      return 1;
     }
+    return info;
   }
 
   private static synchronized String processName()

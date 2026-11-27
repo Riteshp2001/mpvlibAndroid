@@ -4,13 +4,15 @@
 Outputs (all under --out, regenerated from scratch on every run):
   java/     Kodi's Android Java glue, generated from tools/android/packaging/xbmc/src/*.java.in
             with package org.xbmc.kodi (libkodi.so registers its JNI natives on those classes)
-            and the small set of patches needed to run inside another application.
+            and the small set of patches needed to run inside another application. The classes
+            in ENGINE_GLUE are not generated: the module's headless versions replace them.
   res/      Kodi's Android resources, renamed with a "kodi_" prefix so they cannot collide
             with (or be overridden by) resources of the host application.
   jniLibs/  lib/<abi>/*.so from the official APKs, without libc++_shared.so (the host
             application ships a newer, backward-compatible one).
-  assets/   kodi/kodi-assets.zip: the APK's assets/ tree as one archive, extracted by Splash
+  assets/   kodi/kodi-assets.zip: the APK's assets/ tree as one archive, extracted by the engine
             on first run into <cacheDir>/apk/assets (KODI_HOME), plus license/provenance files.
+            The headless skin (kodi/headless/) is added to it as a system add-on.
 """
 
 import argparse
@@ -137,6 +139,12 @@ def flexible(old):
     return re.compile(r"\s+".join(parts))
 
 
+# Kodi's Activity and views, replaced by headless versions in src/main/java/org/xbmc/kodi/. Their
+# native methods must stay identical to the templates', which libkodi.so registers.
+ENGINE_GLUE = ["Main.java", "XBMCMainView.java", "XBMCVideoView.java", "XBMCMediaSession.java"]
+
+HEADLESS_SKIN = "skin.mpvlib.headless"
+
 # (file, old, new). `old` must occur exactly once (whitespace-insensitive).
 JAVA_PATCHES = [
     # Provider authorities: <host applicationId>.kodi.* instead of org.xbmc.kodi.*, matching
@@ -237,7 +245,33 @@ def substitute(text, values, where):
     return text
 
 
-def generate_java(kodi_root, out_java):
+NATIVE_DECL = re.compile(r"native\s+([\w.<>\[\]]+)\s+(\w+)\s*\(([^)]*)\)\s*;")
+
+
+def native_signatures(text):
+    """{name: (return type, (parameter types))} of a Java source, with simple type names."""
+    sigs = {}
+    for ret, name, params in NATIVE_DECL.findall(text):
+        types = tuple(p.split()[-2].split(".")[-1] for p in params.split(",") if p.strip())
+        sigs[name] = (ret.split(".")[-1], types)
+    return sigs
+
+
+def check_engine_glue(files, engine_dir):
+    for rel in ENGINE_GLUE:
+        if rel not in files:
+            fail(f"template for {rel} missing")
+        replacement = engine_dir / rel
+        if not replacement.is_file():
+            fail(f"headless replacement {replacement} missing")
+        expected = native_signatures(files[rel])
+        actual = native_signatures(replacement.read_text(encoding="utf-8"))
+        if expected != actual:
+            fail(f"{replacement} declares natives {actual}, but Kodi's {rel} has {expected}")
+        del files[rel]
+
+
+def generate_java(kodi_root, out_java, engine_dir):
     src = kodi_root / "tools/android/packaging/xbmc/src"
     pkg_dir = out_java / APP_PACKAGE.replace(".", "/")
     values = {"APP_PACKAGE": APP_PACKAGE, "APP_NAME": APP_NAME, "APP_NAME_LC": APP_NAME_LC}
@@ -255,6 +289,7 @@ def generate_java(kodi_root, out_java):
             fail(f"patch for {rel} matched {len(matches)} times: {old[:80]}")
         files[rel] = pattern.sub(lambda _: new, files[rel])
 
+    check_engine_glue(files, engine_dir)
     for rel, text in files.items():
         if "getIdentifier(" in text:
             fail(f"{rel} looks up resources by name; the kodi_ prefix would break it")
@@ -376,21 +411,39 @@ def extract_libs(abi, apk, out_jni):
 
 
 PLATFORM_TAG = re.compile(rb"<platform>android-(?:i686|x86_64|aarch64|armv7)</platform>")
+ADDON_MANIFEST = "assets/system/addon-manifest.xml"
 
 
-def build_assets(apk, out_assets, kodi_root, provenance):
+def headless_skin_entries(skin_dir):
+    """{archive name: bytes} of the headless skin, installed as a Kodi system add-on."""
+    entries = {}
+    for f in sorted(skin_dir.rglob("*")):
+        if f.is_file():
+            entries[f"assets/addons/{HEADLESS_SKIN}/{f.relative_to(skin_dir).as_posix()}"] = f.read_bytes()
+    if f"assets/addons/{HEADLESS_SKIN}/addon.xml" not in entries:
+        fail(f"{skin_dir} has no addon.xml")
+    return entries
+
+
+def build_assets(apk, out_assets, kodi_root, provenance, skin_dir):
     kodi_dir = out_assets / "kodi"
     kodi_dir.mkdir(parents=True, exist_ok=True)
     archive = kodi_dir / "kodi-assets.zip"
     entries = 0
     retagged = []
+    extra = headless_skin_entries(skin_dir)
     with zipfile.ZipFile(apk) as src, \
             zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as dst:
-        for info in sorted(src.infolist(), key=lambda i: i.filename):
-            name = info.filename
+        items = [(i.filename, i) for i in src.infolist()] + [(n, None) for n in extra]
+        for name, info in sorted(items, key=lambda item: item[0]):
             if not name.startswith("assets/") or name.endswith("/"):
                 continue
-            data = src.read(info)
+            data = src.read(info) if info is not None else extra[name]
+            # System add-ons are always enabled, so Kodi can start with the headless skin.
+            if name == ADDON_MANIFEST:
+                if b"<addons>" not in data:
+                    fail(f"unexpected {ADDON_MANIFEST}")
+                data = data.replace(b"<addons>", f"<addons>\n  <addon>{HEADLESS_SKIN}</addon>".encode(), 1)
             # One archive serves every ABI. The official per-ABI builds differ only in the binary
             # add-ons' <platform> tag ("android" matches all ABIs) and in x86's unused egg stubs
             # for its two extra Cryptodome modules, which Kodi loads by library name.
@@ -460,7 +513,7 @@ def main():
         shutil.rmtree(out)
     out_java, out_res, out_jni, out_assets = (out / d for d in ("java", "res", "jniLibs", "assets"))
 
-    java_files = generate_java(kodi_root, out_java)
+    java_files = generate_java(kodi_root, out_java, here / "src/main/java/org/xbmc/kodi")
     generate_res(kodi_root, out_res)
     defined = prefix_resources(out_res, java_files, out_java)
     for abi in abis:
@@ -473,14 +526,21 @@ def main():
     ]
     for abi in abis:
         provenance.append(f"  {abi}: {apks[abi].name} sha256={sha256_of(apks[abi])}")
+    if local_apks:
+        # scripts/build-kodi-source.sh applies every patch in kodi/patches to its checkout.
+        provenance.append("Local APKs are source builds of the tag above with these mpvlibAndroid patches:")
+        for patch in sorted((here / "patches").glob("*.patch")):
+            provenance.append(f"  kodi/patches/{patch.name} sha256={sha256_of(patch)}")
     provenance += [
         f"Assets taken from the {asset_abi} package; binary add-on <platform> tags set to android.",
         "Java glue generated from tools/android/packaging/xbmc/src with package org.xbmc.kodi;",
-        "patches: see mpvlibAndroid kodi/scripts/prepare_kodi.py (JAVA_PATCHES).",
+        "patches: see mpvlibAndroid kodi/scripts/prepare_kodi.py (JAVA_PATCHES); Main, XBMCMainView,",
+        "XBMCVideoView and XBMCMediaSession replaced by headless versions; skin.mpvlib.headless added.",
         f"Source code: https://github.com/xbmc/xbmc/tree/{props['kodi.tag']}",
         "",
     ]
-    entries, retagged = build_assets(apks[asset_abi], out_assets, kodi_root, "\n".join(provenance))
+    entries, retagged = build_assets(apks[asset_abi], out_assets, kodi_root, "\n".join(provenance),
+                                     here / "headless" / HEADLESS_SKIN)
     log(f"assets: {entries} entries from {apks[asset_abi].name}; retagged {retagged}")
     log("resources renamed: " + ", ".join(
         f"{t}={sorted(n)}" for t, n in defined.items() if n))

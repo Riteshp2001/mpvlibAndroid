@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fonts>
+  <fontset id="Default">
+    <font>
+      <name>font13</name>
+      <filename>arial.ttf</filename>
+      <size>30</size>
+    </font>
+  </fontset>
+</fonts>
