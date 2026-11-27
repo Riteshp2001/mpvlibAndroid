@@ -1,24 +1,184 @@
 name: kodi
 
+# Builds the headless Kodi engine AAR (mpvlib-kodi): Kodi is built from source with
+# kodi/patches/*.patch for every ABI, then packaged with the engine (kodi/src). Publishing creates
+# the kodi-v<aar.version> prerelease that mpvRx's kodi distribution downloads.
+
 on:
   push:
     branches:
       - kodi
     tags:
       - "kodi-v*"
+    paths:
+      - "kodi/**"
+      - "settings.gradle"
+      - ".github/workflows/kodi.yml"
   pull_request:
     paths:
       - "kodi/**"
       - ".github/workflows/kodi.yml"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the AAR as the kodi-v<aar.version> prerelease"
+        type: boolean
+        default: false
 
 concurrency:
   group: kodi-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  native:
+    name: Kodi ${{ matrix.abi }} from source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a, x86]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # The APK only depends on Kodi's tag, the patches and the build scripts: a build with the same
+      # inputs is reused, so engine-only changes skip the native build.
+      - name: Compute build key
+        id: key
+        run: |
+          set -euo pipefail
+          hash="$( {
+            sed -n -e 's/^kodi\.tag=//p' -e 's/^kodi\.git=//p' kodi/kodi.properties
+            cat kodi/patches/*.patch kodi/scripts/build-kodi-source.sh kodi/scripts/prefetch_kodi_tarballs.py
+          } | sha256sum | cut -c1-20)"
+          echo "key=kodi-apk-${{ matrix.abi }}-${hash}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Kodi APK
+        id: apk
+        uses: actions/cache/restore@v6
+        with:
+          path: kodi-apk
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Free disk space
+        if: steps.apk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/.ghcup /opt/ghc /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost /usr/share/swift /usr/local/share/powershell /usr/local/julia* \
+            /opt/microsoft /opt/google/chrome /usr/local/share/chromium
+          # One ABI needs about 10 GB: work on the larger of / and the runner's temporary disk.
+          root_free="$(df --output=avail -B1G / | tail -1 | tr -d ' ')"
+          mnt_free=0
+          if mountpoint -q /mnt; then
+            mnt_free="$(df --output=avail -B1G /mnt | tail -1 | tr -d ' ')"
+          fi
+          work=/mnt/kodi-build
+          if [ "$root_free" -ge "$mnt_free" ]; then
+            work="$HOME/kodi-build"
+          fi
+          sudo mkdir -p "$work"
+          sudo chown "$(id -u):$(id -g)" "$work"
+          echo "KODI_WORK=$work" >> "$GITHUB_ENV"
+          df -h / /mnt || true
+
+      - name: Install build packages
+        if: steps.apk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          # docs/README.Android.md, section 2.
+          sudo apt-get install -y -q autoconf bison build-essential curl flex gawk git gperf \
+            lib32stdc++6 lib32z1 lib32z1-dev libcurl4-openssl-dev unzip zip zlib1g-dev
+
+      - name: Setup Java 17
+        if: steps.apk.outputs.cache-hit != 'true'
+        uses: actions/setup-java@v6
+        with:
+          java-version: "17"
+          distribution: temurin
+
+      - name: Setup Python 3.12
+        if: steps.apk.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Android SDK packages
+        if: steps.apk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          # docs/README.Android.md, section 3.2.
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "platforms;android-34" "build-tools;33.0.1" "ndk;21.4.7075529" > /dev/null
+
+      - name: Restore depends tarballs
+        if: steps.apk.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.KODI_WORK }}/tarballs
+          key: kodi-tarballs-${{ hashFiles('kodi/kodi.properties') }}
+          restore-keys: kodi-tarballs-
+
+      - name: Build Kodi
+        if: steps.apk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          # Steps that completed are skipped on the second attempt (a flaky download or parallel make).
+          for attempt in 1 2; do
+            if kodi/scripts/build-kodi-source.sh "${{ matrix.abi }}" "$KODI_WORK" "$(nproc)"; then
+              break
+            fi
+            [ "$attempt" = 2 ] && exit 1
+            echo "::warning::Kodi ${{ matrix.abi }} build failed, retrying"
+          done
+          mkdir -p kodi-apk
+          cp "$KODI_WORK/${{ matrix.abi }}/xbmc/kodiapp-${{ matrix.abi }}-release.apk" kodi-apk/
+          df -h "$KODI_WORK"
+
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kodi-logs-${{ matrix.abi }}
+          path: ${{ env.KODI_WORK }}/${{ matrix.abi }}/logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Save depends tarballs
+        if: steps.apk.outputs.cache-hit != 'true' && matrix.abi == 'arm64-v8a'
+        uses: actions/cache/save@v6
+        continue-on-error: true
+        with:
+          path: ${{ env.KODI_WORK }}/tarballs
+          key: kodi-tarballs-${{ hashFiles('kodi/kodi.properties') }}
+
+      - name: Save Kodi APK
+        if: steps.apk.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: kodi-apk
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Upload Kodi APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: kodi-apk-${{ matrix.abi }}
+          path: kodi-apk/kodiapp-${{ matrix.abi }}-release.apk
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  aar:
     name: Build mpvlib-kodi AAR
+    needs: native
     runs-on: ubuntu-24.04
 
     permissions:
@@ -49,6 +209,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install NDK and CMake for the engine shim
+        run: |
+          set -euo pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.3.13750724" "cmake;3.22.1" > /dev/null
+
+      - name: Download Kodi APKs
+        uses: actions/download-artifact@v8
+        with:
+          pattern: kodi-apk-*
+          path: kodi-apks
+          merge-multiple: true
+
       - name: Restore Kodi inputs cache
         id: kodi-inputs
         uses: actions/cache/restore@v6
@@ -57,28 +230,43 @@ jobs:
           key: kodi-inputs-${{ hashFiles('kodi/kodi.properties') }}
 
       - name: Build AAR
-        run: ./gradlew :kodi:assembleRelease --stacktrace
+        run: |
+          ./gradlew :kodi:assembleRelease --stacktrace \
+            "-PkodiApk.arm64-v8a=$PWD/kodi-apks/kodiapp-arm64-v8a-release.apk" \
+            "-PkodiApk.armeabi-v7a=$PWD/kodi-apks/kodiapp-armeabi-v7a-release.apk" \
+            "-PkodiApk.x86=$PWD/kodi-apks/kodiapp-x86-release.apk"
 
       - name: Save Kodi inputs cache
         if: steps.kodi-inputs.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
+        continue-on-error: true
         with:
           path: ~/.cache/mpvlib-kodi
           key: kodi-inputs-${{ hashFiles('kodi/kodi.properties') }}
 
-      - name: Stage AAR
+      - name: Verify and stage AAR
         run: |
           set -euo pipefail
           version="$(sed -n 's/^aar.version=//p' kodi/kodi.properties)"
           aar="dist/mpvlib-kodi-${version}.aar"
           mkdir -p dist
           cp kodi/build/outputs/aar/kodi-release.aar "$aar"
+          lib="$RUNNER_TEMP/libkodi.so"
           for abi in arm64-v8a armeabi-v7a x86; do
-            unzip -l "$aar" "jni/${abi}/libkodi.so" > /dev/null
+            unzip -l "$aar" "jni/${abi}/libkodi.so" "jni/${abi}/libkodiengine.so" > /dev/null
+            # The engine patches (kodi/patches) must be in every ABI's libkodi.so. Extracted to a file:
+            # with pipefail, `unzip -p | grep -q` fails when grep stops reading early.
+            unzip -p "$aar" "jni/${abi}/libkodi.so" > "$lib"
+            for marker in KODI_ENGINE_MODE Player.GetVideoSettings Player.GetChapters; do
+              grep -aq "$marker" "$lib" ||
+                { echo "jni/${abi}/libkodi.so lacks ${marker}: not built with kodi/patches"; exit 1; }
+            done
           done
+          rm -f "$lib"
           unzip -l "$aar" assets/kodi/kodi-assets.zip > /dev/null
           unzip -p "$aar" assets/kodi/SOURCES.txt > dist/SOURCES.txt
           (cd dist && sha256sum "mpvlib-kodi-${version}.aar" > "mpvlib-kodi-${version}.aar.sha256")
+          cat dist/SOURCES.txt dist/*.sha256
           echo "VERSION_NAME=${version}" >> "$GITHUB_ENV"
 
       - name: Upload AAR artifact
@@ -90,8 +278,8 @@ jobs:
 
   release:
     name: Publish mpvlib-kodi prerelease
-    if: startsWith(github.ref, 'refs/tags/kodi-v')
-    needs: build
+    if: startsWith(github.ref, 'refs/tags/kodi-v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    needs: aar
     runs-on: ubuntu-24.04
 
     permissions:
@@ -105,11 +293,12 @@ jobs:
         run: |
           set -euo pipefail
           version="$(sed -n 's/^aar.version=//p' kodi/kodi.properties)"
-          if [[ "${GITHUB_REF_NAME}" != "kodi-v${version}" ]]; then
+          if [[ "${GITHUB_REF}" == refs/tags/* && "${GITHUB_REF_NAME}" != "kodi-v${version}" ]]; then
             echo "Tag ${GITHUB_REF_NAME} does not match aar.version ${version} (expected kodi-v${version})."
             exit 1
           fi
           echo "VERSION_NAME=${version}" >> "$GITHUB_ENV"
+          echo "KODI_TAG=$(sed -n 's/^kodi.tag=//p' kodi/kodi.properties)" >> "$GITHUB_ENV"
 
       - name: Download AAR
         uses: actions/download-artifact@v8
@@ -123,12 +312,15 @@ jobs:
           {
             echo "# mpvlib-kodi ${VERSION_NAME}"
             echo ""
-            echo "Kodi's engine packaged as an Android library for apps that embed it in a separate \`:kodi\` process."
-            echo "Native libraries and assets are repackaged unchanged from the official Kodi APKs; see SOURCES.txt."
+            echo "Kodi as a headless playback engine for Android apps: \`KodiLib\` speaks mpv's"
+            echo "commands, properties and events, and Kodi renders only video and subtitles into the"
+            echo "host's Surfaces, from the host's \`:kodi\` process. See kodi/README.md."
             echo ""
-            echo "ABIs: \`arm64-v8a\`, \`armeabi-v7a\`, \`x86\`. Kodi is licensed GPL-2.0-or-later; its source is available at"
-            echo "https://github.com/xbmc/xbmc. Kodi® is a registered trademark of the XBMC Foundation; this package is not"
-            echo "endorsed by the XBMC Foundation."
+            echo "Kodi ${KODI_TAG} is built from source with the patches in kodi/patches for"
+            echo "\`arm64-v8a\`, \`armeabi-v7a\` and \`x86\` (mpvlibAndroid commit ${GITHUB_SHA})."
+            echo "Kodi is licensed GPL-2.0-or-later; its source is available at https://github.com/xbmc/xbmc"
+            echo "and the patches in this repository. Kodi® is a registered trademark of the XBMC Foundation;"
+            echo "this package is not endorsed by the XBMC Foundation."
             echo ""
             echo '```text'
             cat dist/SOURCES.txt
@@ -136,14 +328,17 @@ jobs:
             echo '```'
           } > dist/release-notes.md
 
-      - name: Create GitHub prerelease
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: mpvlib-kodi ${{ env.VERSION_NAME }}
-          body_path: dist/release-notes.md
-          prerelease: true
-          files: |
-            dist/*.aar
-            dist/*.sha256
-            dist/SOURCES.txt
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="kodi-v${VERSION_NAME}"
+          files=(dist/*.aar dist/*.sha256 dist/SOURCES.txt)
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --clobber
+            gh release edit "$tag" --notes-file dist/release-notes.md
+          else
+            gh release create "$tag" "${files[@]}" --target "$GITHUB_SHA" --prerelease \
+              --title "mpvlib-kodi ${VERSION_NAME}" --notes-file dist/release-notes.md
+          fi
