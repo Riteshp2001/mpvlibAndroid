@@ -2,6 +2,9 @@
 
 **MpvRx / mpvlibAndroid** — An Android video player library built on mpv.
 
+Looking for the embedded Kodi engine? Its source and releases now live in
+[KodiLibAndroid](https://github.com/Riteshp2001/kodilibandroid).
+
 ## What is This?
 
 This library brings the full power of mpv to Android — play any video, generate thumbnails, and more. All through a simple Kotlin API.
