@@ -190,6 +190,7 @@ final class KodiEngine implements PlayerBridge.Sink, XBMCVideoView.Listener
         {
           mMainView.resize(width, height);
           mHost.setDisplaySize(width, height);
+          mBridge.setWindowSize(width, height);
         }
         else
         {
@@ -485,6 +486,7 @@ final class KodiEngine implements PlayerBridge.Sink, XBMCVideoView.Listener
       resolveSize(mGuiSurface);
       mMainView.setSurface(mGuiSurface);
       mHost.setDisplaySize(mGuiSurface.getWidth(), mGuiSurface.getHeight());
+      mBridge.setWindowSize(mGuiSurface.getWidth(), mGuiSurface.getHeight());
       mGuiApplied = true;
       releasePlaceholder();
     }

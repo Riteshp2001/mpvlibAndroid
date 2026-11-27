@@ -136,6 +136,9 @@ final class PlayerBridge implements XBMCMediaSession.Listener
   // equalizer (-100..100); Kodi resets them per file, so they are applied to every file.
   private double mZoom;
   private double mAspectOverride = -1;
+  private double mPanscan;
+  private int mWindowWidth;
+  private int mWindowHeight;
   private double mSourceAspect;
   private final Map<String, Double> mPicture = new LinkedHashMap<>();
   // mpv's A-B loop, done here: Kodi has none.
@@ -375,6 +378,11 @@ final class PlayerBridge implements XBMCMediaSession.Listener
       case "video-aspect-override":
         mAspectOverride = parseAspect(value);
         publish("video-aspect-override", num(mAspectOverride));
+        applyViewMode();
+        break;
+      case "panscan":
+        mPanscan = Math.max(0, Math.min(1, parseDouble(value, 0)));
+        publish("panscan", num(mPanscan));
         applyViewMode();
         break;
       case "brightness":
@@ -998,7 +1006,12 @@ final class PlayerBridge implements XBMCMediaSession.Listener
     if (w > 0 && h > 0)
     {
       double aspect = dar > 0 ? dar : (double) w / h;
+      boolean aspectChanged = Math.abs(aspect - mSourceAspect) > 0.001;
       mSourceAspect = aspect;
+      // The custom view modes depend on the source aspect, which Kodi reports after the file
+      // started.
+      if (aspectChanged && (mPanscan > 0 || mAspectOverride >= 0))
+        applyViewMode();
       int dw = (int) Math.round(h * aspect);
       JSONObject params = obj("w", w, "h", h, "dw", dw, "dh", h, "aspect", aspect,
                               "par", aspect * h / w, "rotate", 0);
@@ -1405,19 +1418,48 @@ final class PlayerBridge implements XBMCMediaSession.Listener
   {
     if (mPhase != Phase.PLAYING || mPlayerId < 0)
       return;
-    if (Math.abs(mZoom) < 0.001 && mAspectOverride < 0)
+    boolean zoomed = Math.abs(mZoom) >= 0.001;
+    if (!zoomed && mAspectOverride < 0 && mPanscan <= 0)
     {
       rpc("Player.SetViewMode", obj("viewmode", "normal"));
       return;
     }
-    double zoom = Math.max(0.5, Math.min(2, Math.pow(2, mZoom)));
+    if (!zoomed && mAspectOverride < 0 && mPanscan >= 1)
+    {
+      // Kodi's own crop to fill, which has no zoom limit.
+      rpc("Player.SetViewMode", obj("viewmode", "zoom"));
+      return;
+    }
     double ratio = 1;
     double target = mAspectOverride == 0 && mVideoHeight > 0
                     ? (double) mVideoWidth / mVideoHeight : mAspectOverride;
     // Kodi shows the source aspect times the pixel ratio.
     if (target > 0 && mSourceAspect > 0)
       ratio = Math.max(0.5, Math.min(2, target / mSourceAspect));
-    rpc("Player.SetViewMode", obj("viewmode", obj("zoom", zoom, "pixelratio", ratio)));
+    double zoom = Math.pow(2, mZoom) * panscanZoom(mSourceAspect * ratio);
+    rpc("Player.SetViewMode",
+        obj("viewmode", obj("zoom", Math.max(0.5, Math.min(2, zoom)), "pixelratio", ratio)));
+  }
+
+  /** mpv's panscan: the share of the black bars that the enlarged video covers. */
+  private double panscanZoom(double displayAspect)
+  {
+    if (mPanscan <= 0 || displayAspect <= 0 || mWindowWidth <= 0 || mWindowHeight <= 0)
+      return 1;
+    double window = (double) mWindowWidth / mWindowHeight;
+    double fill = displayAspect > window ? displayAspect / window : window / displayAspect;
+    return 1 + mPanscan * (fill - 1);
+  }
+
+  /** Size of the GUI layer, which Kodi fits the video in. */
+  void setWindowSize(int width, int height)
+  {
+    if (width <= 0 || height <= 0 || (width == mWindowWidth && height == mWindowHeight))
+      return;
+    mWindowWidth = width;
+    mWindowHeight = height;
+    if (mPanscan > 0)
+      applyViewMode();
   }
 
   /**

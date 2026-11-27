@@ -64,8 +64,9 @@ mpv properties and options the engine maps to Kodi:
 - **Audio:** `volume` (mpv's cubic scale on Kodi's 60 dB range; above 100 through Kodi's volume
   amplification, up to `volume-max`), `mute`, `audio-spdif` (passthrough), `audio-channels`.
 - **Video:** `hwdec` (`no` decodes with FFmpeg, anything else with MediaCodec; a playing file
-  re-opens at its position), `video-zoom` and `video-aspect-override` (Kodi's view modes),
-  `brightness`, `contrast`, `video-params` (with HDR transfer and primaries) and `vo-configured`.
+  re-opens at its position), `video-zoom`, `video-aspect-override` and `panscan` (Kodi's view
+  modes), `brightness`, `contrast`, `video-params` (with HDR transfer and primaries) and
+  `vo-configured`.
 - **Subtitle style:** `sub-font-size`, `sub-scale`, `sub-bold`, `sub-italic`, `sub-color`,
   `sub-border-color`, `sub-border-size`, `sub-back-color`, `sub-shadow-offset`, `sub-shadow-color`,
   `sub-border-style`, `sub-pos` and `sub-ass-override` set Kodi's global subtitle settings
