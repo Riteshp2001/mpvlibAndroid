@@ -1,0 +1,76 @@
+Headless engine mode: a paused video is not redrawn every frame.
+
+Kodi's fullscreen video window marks itself dirty on every frame while the video is drawn in the
+GUI layer, so a paused video was rendered again at the display's refresh rate, keeping the GPU
+busy. With KODI_ENGINE_MODE set, a paused video is redrawn twice a second, which is enough for
+subtitle changes, and at full rate for half a second after its position changed, so a seek or a
+frame step made while paused shows the new frame at once.
+
+diff --git a/xbmc/video/windows/GUIWindowFullScreen.cpp b/xbmc/video/windows/GUIWindowFullScreen.cpp
+index 1fccba9..6dd0963 100644
+--- a/xbmc/video/windows/GUIWindowFullScreen.cpp
++++ b/xbmc/video/windows/GUIWindowFullScreen.cpp
+@@ -36,6 +36,9 @@
+ #if defined(TARGET_DARWIN)
+ #include "platform/posix/PosixResourceCounter.h"
+ #endif
++#if defined(TARGET_ANDROID)
++#include "platform/android/activity/XBMCApp.h"
++#endif
+ 
+ using namespace KODI;
+ using namespace GUILIB;
+@@ -364,7 +367,32 @@ void CGUIWindowFullScreen::Process(unsigned int currentTime, CDirtyRegionList &d
+   const auto& components = CServiceBroker::GetAppComponents();
+   const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+   if (appPlayer->IsRenderingGuiLayer())
+-    MarkDirtyRegion();
++  {
++    const auto now = std::chrono::steady_clock::now();
++    bool throttled = false;
++#if defined(TARGET_ANDROID)
++    // A headless engine redraws a paused video twice a second instead of every frame, which is
++    // enough for subtitle changes, and at full rate for a moment after its position changed, so
++    // a seek or a frame step shows the new frame at once. Real time: the frame time jumps ahead
++    // when Kodi skips a frame.
++    if (CXBMCApp::IsEngineMode() && appPlayer->IsPausedPlayback())
++    {
++      const int64_t time = appPlayer->GetTime();
++      if (time != m_pausedTime)
++      {
++        m_pausedTime = time;
++        m_fullRateUntil = now + std::chrono::milliseconds(500);
++      }
++      throttled = now >= m_fullRateUntil &&
++                  now - m_lastVideoRender < std::chrono::milliseconds(500);
++    }
++#endif
++    if (!throttled)
++    {
++      MarkDirtyRegion();
++      m_lastVideoRender = now;
++    }
++  }
+ 
+   m_controlStats->Reset();
+ 
+diff --git a/xbmc/video/windows/GUIWindowFullScreen.h b/xbmc/video/windows/GUIWindowFullScreen.h
+index c47787e..56da6dd 100644
+--- a/xbmc/video/windows/GUIWindowFullScreen.h
++++ b/xbmc/video/windows/GUIWindowFullScreen.h
+@@ -11,6 +11,7 @@
+ #include "guilib/GUIWindow.h"
+ 
+ #include <chrono>
++#include <cstdint>
+ 
+ class CGUIDialog;
+ 
+@@ -42,4 +43,7 @@ private:
+   std::chrono::time_point<std::chrono::steady_clock> m_dwShowViewModeTimeout;
+ 
+   bool m_bShowCurrentTime;
++  std::chrono::steady_clock::time_point m_lastVideoRender;
++  std::chrono::steady_clock::time_point m_fullRateUntil;
++  int64_t m_pausedTime = -1;
+ };

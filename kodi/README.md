@@ -105,6 +105,7 @@ Applied by `scripts/build-kodi-source.sh`. They only change Kodi's behaviour whe
 | `0002-engine-host-owns-audio-focus` | Kodi doesn't request or abandon the audio focus; the host owns it and pauses the engine. |
 | `0003-engine-display-capabilities` | Kodi's window is never attached, so it falls back to the default display for HDR capabilities, display modes and the refresh rate. Display mode and refresh-rate changes are left to the host's window. |
 | `0004-engine-jsonrpc-player-extensions` | `Player.GetVideoSettings`, `Player.SetVideoSettings` (picture, view mode, deinterlacing, scaling, tone mapping, volume amplification) and `Player.GetChapters`. `Player.Open` checks that a local file exists without Kodi's directory cache. |
+| `0005-engine-paused-video-redraw` | A paused video drawn in the GUI layer is redrawn twice a second, and at full rate for half a second after a seek or frame step, instead of on every frame. |
 
 ### Java glue
 
