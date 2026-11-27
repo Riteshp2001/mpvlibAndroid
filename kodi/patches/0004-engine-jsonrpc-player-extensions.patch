@@ -1,0 +1,815 @@
+JSON-RPC: video settings and chapters of the current playback; Player.Open file check.
+
+Player.GetVideoSettings and Player.SetVideoSettings read and change the per-video settings of the
+current playback like the video and audio settings dialogs do (picture, view mode, deinterlacing,
+scaling, tone mapping, volume amplification, center mix level), and report the renderer features
+and the deinterlacing and scaling methods available for the current video. Player.GetChapters
+lists the chapters of the current playback (index as used by Kodi, title, start in seconds).
+
+Player.Open (and every method taking an item with a "file") checked that a local file exists
+through the directory cache: once Kodi had listed a folder, for example to look for external
+subtitles, a file created in it later was reported missing and the method failed with "Invalid
+params". The check now bypasses the cache.
+
+diff --git a/xbmc/interfaces/json-rpc/FileItemHandler.cpp b/xbmc/interfaces/json-rpc/FileItemHandler.cpp
+index 0742644..5faec97 100644
+--- a/xbmc/interfaces/json-rpc/FileItemHandler.cpp
++++ b/xbmc/interfaces/json-rpc/FileItemHandler.cpp
+@@ -509,8 +509,9 @@ bool CFileItemHandler::FillFileItemList(const CVariant &parameterObject, CFileIt
+   CFileOperations::FillFileItemList(parameterObject, list);
+ 
+   std::string file = parameterObject["file"].asString();
+-  if (!file.empty() &&
+-      (URIUtils::IsURL(file) || (CFileUtils::Exists(file) && !CDirectory::Exists(file))))
++  // Bypass the directory cache: a file created after its folder was listed is not in the cache.
++  if (!file.empty() && (URIUtils::IsURL(file) ||
++                        (CFileUtils::Exists(file, false) && !CDirectory::Exists(file, false))))
+   {
+     bool added = false;
+     for (int index = 0; index < list.Size(); index++)
+diff --git a/xbmc/interfaces/json-rpc/JSONServiceDescription.cpp b/xbmc/interfaces/json-rpc/JSONServiceDescription.cpp
+index 0ce49b9..192589e 100644
+--- a/xbmc/interfaces/json-rpc/JSONServiceDescription.cpp
++++ b/xbmc/interfaces/json-rpc/JSONServiceDescription.cpp
+@@ -80,6 +80,9 @@ JsonRpcMethodMap CJSONServiceDescription::m_methodMaps[] = {
+   { "Player.AddSubtitle",                           CPlayerOperations::AddSubtitle },
+   { "Player.SetSubtitle",                           CPlayerOperations::SetSubtitle },
+   { "Player.SetVideoStream",                        CPlayerOperations::SetVideoStream },
++  { "Player.GetVideoSettings",                      CPlayerOperations::GetVideoSettings },
++  { "Player.SetVideoSettings",                      CPlayerOperations::SetVideoSettings },
++  { "Player.GetChapters",                           CPlayerOperations::GetChapters },
+ 
+ // Playlist
+   { "Playlist.GetPlaylists",                        CPlaylistOperations::GetPlaylists },
+diff --git a/xbmc/interfaces/json-rpc/PlayerOperations.cpp b/xbmc/interfaces/json-rpc/PlayerOperations.cpp
+index a7a3cbb..826a12d 100644
+--- a/xbmc/interfaces/json-rpc/PlayerOperations.cpp
++++ b/xbmc/interfaces/json-rpc/PlayerOperations.cpp
+@@ -52,8 +52,12 @@
+ #include "utils/Variant.h"
+ #include "video/VideoDatabase.h"
+ 
++#include <algorithm>
++#include <cmath>
++#include <iterator>
+ #include <map>
+ #include <tuple>
++#include <type_traits>
+ 
+ using namespace JSONRPC;
+ using namespace PVR;
+@@ -75,6 +79,139 @@ void AppendSubtitleStreamFlagsAsBooleans(CVariant& list, StreamFlags flags)
+   list["isimpaired"] = ((flags & StreamFlags::FLAG_HEARING_IMPAIRED) != 0);
+ }
+ 
++// The methods offered by the video settings dialog (CGUIDialogVideoSettings), in its order.
++constexpr EINTERLACEMETHOD InterlaceMethods[] = {
++    VS_INTERLACEMETHOD_NONE,
++    VS_INTERLACEMETHOD_AUTO,
++    VS_INTERLACEMETHOD_RENDER_BLEND,
++    VS_INTERLACEMETHOD_RENDER_WEAVE,
++    VS_INTERLACEMETHOD_RENDER_BOB,
++    VS_INTERLACEMETHOD_DEINTERLACE,
++    VS_INTERLACEMETHOD_DEINTERLACE_HALF,
++    VS_INTERLACEMETHOD_VDPAU_TEMPORAL_SPATIAL,
++    VS_INTERLACEMETHOD_VDPAU_TEMPORAL,
++    VS_INTERLACEMETHOD_VDPAU_BOB,
++    VS_INTERLACEMETHOD_VDPAU_TEMPORAL_SPATIAL_HALF,
++    VS_INTERLACEMETHOD_VDPAU_TEMPORAL_HALF,
++    VS_INTERLACEMETHOD_VAAPI_BOB,
++    VS_INTERLACEMETHOD_VAAPI_MADI,
++    VS_INTERLACEMETHOD_VAAPI_MACI,
++    VS_INTERLACEMETHOD_DXVA_AUTO,
++};
++
++constexpr ESCALINGMETHOD ScalingMethods[] = {
++    VS_SCALINGMETHOD_NEAREST,
++    VS_SCALINGMETHOD_LINEAR,
++    VS_SCALINGMETHOD_CUBIC_B_SPLINE,
++    VS_SCALINGMETHOD_CUBIC_MITCHELL,
++    VS_SCALINGMETHOD_CUBIC_CATMULL,
++    VS_SCALINGMETHOD_CUBIC_0_075,
++    VS_SCALINGMETHOD_CUBIC_0_1,
++    VS_SCALINGMETHOD_LANCZOS2,
++    VS_SCALINGMETHOD_SPLINE36_FAST,
++    VS_SCALINGMETHOD_LANCZOS3_FAST,
++    VS_SCALINGMETHOD_SPLINE36,
++    VS_SCALINGMETHOD_LANCZOS3,
++    VS_SCALINGMETHOD_SINC8,
++    VS_SCALINGMETHOD_BICUBIC_SOFTWARE,
++    VS_SCALINGMETHOD_LANCZOS_SOFTWARE,
++    VS_SCALINGMETHOD_SINC_SOFTWARE,
++    VS_SCALINGMETHOD_VDPAU_HARDWARE,
++    VS_SCALINGMETHOD_DXVA_HARDWARE,
++    VS_SCALINGMETHOD_AUTO,
++};
++
++struct RenderFeature
++{
++  const char* name;
++  ERENDERFEATURE feature;
++};
++
++constexpr RenderFeature RenderFeatures[] = {
++    {"brightness", RENDERFEATURE_BRIGHTNESS},
++    {"contrast", RENDERFEATURE_CONTRAST},
++    {"gamma", RENDERFEATURE_GAMMA},
++    {"sharpness", RENDERFEATURE_SHARPNESS},
++    {"noise", RENDERFEATURE_NOISE},
++    {"nonlinearstretch", RENDERFEATURE_NONLINSTRETCH},
++    {"pixelratio", RENDERFEATURE_PIXEL_RATIO},
++    {"zoom", RENDERFEATURE_ZOOM},
++    {"verticalshift", RENDERFEATURE_VERTICAL_SHIFT},
++    {"tonemap", RENDERFEATURE_TONEMAP},
++    {"stretch", RENDERFEATURE_STRETCH},
++    {"postprocess", RENDERFEATURE_POSTPROCESS},
++};
++
++CVariant VideoSettingsToVariant(const CApplicationPlayer& appPlayer)
++{
++  const CVideoSettings vs = appPlayer.GetVideoSettings();
++
++  CVariant result(CVariant::VariantTypeObject);
++  result["brightness"] = vs.m_Brightness;
++  result["contrast"] = vs.m_Contrast;
++  result["gamma"] = vs.m_Gamma;
++  result["sharpness"] = vs.m_Sharpness;
++  result["noisereduction"] = vs.m_NoiseReduction;
++  result["postprocess"] = vs.m_PostProcess;
++  result["interlacemethod"] = static_cast<int>(vs.m_InterlaceMethod);
++  result["scalingmethod"] = static_cast<int>(vs.m_ScalingMethod);
++  result["viewmode"] = vs.m_ViewMode;
++  result["zoom"] = vs.m_CustomZoomAmount;
++  result["pixelratio"] = vs.m_CustomPixelRatio;
++  result["verticalshift"] = vs.m_CustomVerticalShift;
++  result["nonlinearstretch"] = vs.m_CustomNonLinStretch;
++  result["tonemapmethod"] = static_cast<int>(vs.m_ToneMapMethod);
++  result["tonemapparam"] = vs.m_ToneMapParam;
++  result["volumeamplification"] = vs.m_VolumeAmplification;
++  result["centermixlevel"] = vs.m_CenterMixLevel;
++
++  result["supports"] = CVariant(CVariant::VariantTypeObject);
++  for (const RenderFeature& feature : RenderFeatures)
++    result["supports"][feature.name] = appPlayer.Supports(feature.feature);
++
++  result["interlacemethods"] = CVariant(CVariant::VariantTypeArray);
++  for (EINTERLACEMETHOD method : InterlaceMethods)
++  {
++    if (appPlayer.Supports(method))
++      result["interlacemethods"].push_back(static_cast<int>(method));
++  }
++
++  result["scalingmethods"] = CVariant(CVariant::VariantTypeArray);
++  for (ESCALINGMETHOD method : ScalingMethods)
++  {
++    if (appPlayer.Supports(method))
++      result["scalingmethods"].push_back(static_cast<int>(method));
++  }
++
++  return result;
++}
++
++// Reads an optional setting into value. Fails if the setting is outside of [min, max].
++template<typename T>
++bool ParseSetting(const CVariant& setting, T min, T max, T& value, bool& changed)
++{
++  if (setting.isNull())
++    return true;
++
++  if constexpr (std::is_integral_v<T>)
++  {
++    const int64_t parsed = setting.asInteger();
++    if (parsed < min || parsed > max)
++      return false;
++    value = static_cast<T>(parsed);
++  }
++  else
++  {
++    const T parsed = static_cast<T>(setting.asDouble());
++    if (!(parsed >= min && parsed <= max))
++      return false;
++    value = parsed;
++  }
++
++  changed = true;
++  return true;
++}
++
+ } // namespace
+ 
+ JSONRPC_STATUS CPlayerOperations::GetActivePlayers(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result)
+@@ -1413,6 +1550,185 @@ JSONRPC_STATUS CPlayerOperations::SetVideoStream(const std::string &method, ITra
+   return ACK;
+ }
+ 
++JSONRPC_STATUS CPlayerOperations::GetVideoSettings(const std::string& method,
++                                                   ITransportLayer* transport,
++                                                   IClient* client,
++                                                   const CVariant& parameterObject,
++                                                   CVariant& result)
++{
++  switch (GetPlayer(parameterObject["playerid"]))
++  {
++    case Video:
++    case Audio:
++    {
++      const auto& components = CServiceBroker::GetAppComponents();
++      const auto appPlayer = components.GetComponent<CApplicationPlayer>();
++      if (!appPlayer->HasPlayer())
++        return FailedToExecute;
++
++      result = VideoSettingsToVariant(*appPlayer);
++      return OK;
++    }
++
++    case Picture:
++    case None:
++    default:
++      return FailedToExecute;
++  }
++}
++
++JSONRPC_STATUS CPlayerOperations::SetVideoSettings(const std::string& method,
++                                                   ITransportLayer* transport,
++                                                   IClient* client,
++                                                   const CVariant& parameterObject,
++                                                   CVariant& result)
++{
++  switch (GetPlayer(parameterObject["playerid"]))
++  {
++    case Video:
++    case Audio:
++    {
++      auto& components = CServiceBroker::GetAppComponents();
++      const auto appPlayer = components.GetComponent<CApplicationPlayer>();
++      if (!appPlayer->HasPlayer())
++        return FailedToExecute;
++
++      // Everything is validated before anything is applied. The ranges are those of the video
++      // and audio settings dialogs; the JSON schema does not check integers given for numbers.
++      const CVariant& settings = parameterObject["settings"];
++      CVideoSettings vs = appPlayer->GetVideoSettings();
++      bool settingsChanged = false;
++      bool viewModeChanged = false;
++      bool amplificationChanged = false;
++      float amplification = vs.m_VolumeAmplification;
++
++      if (!ParseSetting(settings["brightness"], 0.0f, 100.0f, vs.m_Brightness, settingsChanged) ||
++          !ParseSetting(settings["contrast"], 0.0f, 100.0f, vs.m_Contrast, settingsChanged) ||
++          !ParseSetting(settings["gamma"], 0.0f, 100.0f, vs.m_Gamma, settingsChanged) ||
++          !ParseSetting(settings["sharpness"], -1.0f, 1.0f, vs.m_Sharpness, settingsChanged) ||
++          !ParseSetting(settings["noisereduction"], 0.0f, 1.0f, vs.m_NoiseReduction,
++                        settingsChanged) ||
++          !ParseSetting(settings["tonemapparam"], 0.1f, 5.0f, vs.m_ToneMapParam, settingsChanged) ||
++          !ParseSetting(settings["centermixlevel"], -10, 30, vs.m_CenterMixLevel,
++                        settingsChanged) ||
++          !ParseSetting(settings["zoom"], 0.5f, 2.0f, vs.m_CustomZoomAmount, viewModeChanged) ||
++          !ParseSetting(settings["pixelratio"], 0.5f, 2.0f, vs.m_CustomPixelRatio,
++                        viewModeChanged) ||
++          !ParseSetting(settings["verticalshift"], -2.0f, 2.0f, vs.m_CustomVerticalShift,
++                        viewModeChanged) ||
++          !ParseSetting(settings["volumeamplification"], VOLUME_DRC_MINIMUM * 0.01f,
++                        VOLUME_DRC_MAXIMUM * 0.01f, amplification, amplificationChanged))
++        return InvalidParams;
++
++      if (settings["postprocess"].isBoolean())
++      {
++        vs.m_PostProcess = settings["postprocess"].asBoolean();
++        settingsChanged = true;
++      }
++      if (settings["nonlinearstretch"].isBoolean())
++      {
++        vs.m_CustomNonLinStretch = settings["nonlinearstretch"].asBoolean();
++        viewModeChanged = true;
++      }
++
++      // As in the dialog, a custom zoom, pixel ratio, vertical shift or stretch selects the custom
++      // view mode, unless a view mode is given too.
++      if (viewModeChanged)
++        vs.m_ViewMode = ViewModeCustom;
++      if (!ParseSetting(settings["viewmode"], static_cast<int>(ViewModeNormal),
++                        static_cast<int>(ViewModeZoom110Width), vs.m_ViewMode, viewModeChanged))
++        return InvalidParams;
++
++      const CVariant& interlaceMethod = settings["interlacemethod"];
++      if (!interlaceMethod.isNull())
++      {
++        const auto method = std::find(std::begin(InterlaceMethods), std::end(InterlaceMethods),
++                                      interlaceMethod.asInteger());
++        if (method == std::end(InterlaceMethods) || !appPlayer->Supports(*method))
++          return InvalidParams;
++        vs.m_InterlaceMethod = *method;
++        settingsChanged = true;
++      }
++
++      const CVariant& scalingMethod = settings["scalingmethod"];
++      if (!scalingMethod.isNull())
++      {
++        const auto method = std::find(std::begin(ScalingMethods), std::end(ScalingMethods),
++                                      scalingMethod.asInteger());
++        if (method == std::end(ScalingMethods) || !appPlayer->Supports(*method))
++          return InvalidParams;
++        vs.m_ScalingMethod = *method;
++        settingsChanged = true;
++      }
++
++      int toneMapMethod = vs.m_ToneMapMethod;
++      if (!ParseSetting(settings["tonemapmethod"], static_cast<int>(VS_TONEMAPMETHOD_OFF),
++                        static_cast<int>(VS_TONEMAPMETHOD_MAX) - 1, toneMapMethod,
++                        settingsChanged))
++        return InvalidParams;
++      vs.m_ToneMapMethod = static_cast<ETONEMAPMETHOD>(toneMapMethod);
++
++      if (settingsChanged)
++        appPlayer->SetVideoSettings(vs);
++      if (viewModeChanged)
++        appPlayer->SetRenderViewMode(vs.m_ViewMode, vs.m_CustomZoomAmount, vs.m_CustomPixelRatio,
++                                     vs.m_CustomVerticalShift, vs.m_CustomNonLinStretch);
++      if (amplificationChanged)
++        appPlayer->SetDynamicRangeCompression(std::lround(amplification * 100));
++
++      result = VideoSettingsToVariant(*appPlayer);
++      return OK;
++    }
++
++    case Picture:
++    case None:
++    default:
++      return FailedToExecute;
++  }
++}
++
++JSONRPC_STATUS CPlayerOperations::GetChapters(const std::string& method,
++                                              ITransportLayer* transport,
++                                              IClient* client,
++                                              const CVariant& parameterObject,
++                                              CVariant& result)
++{
++  switch (GetPlayer(parameterObject["playerid"]))
++  {
++    case Video:
++    case Audio:
++    {
++      const auto& components = CServiceBroker::GetAppComponents();
++      const auto appPlayer = components.GetComponent<CApplicationPlayer>();
++
++      result = CVariant(CVariant::VariantTypeArray);
++      const int count = appPlayer->GetChapterCount();
++      for (int index = 1; index <= count; index++)
++      {
++        // Players report the start of a chapter in whole seconds.
++        const int64_t time = appPlayer->GetChapterPos(index);
++        if (time < 0)
++          continue;
++
++        std::string title;
++        appPlayer->GetChapterName(title, index);
++
++        CVariant chapter(CVariant::VariantTypeObject);
++        chapter["index"] = index;
++        chapter["title"] = title;
++        chapter["time"] = static_cast<double>(time);
++        result.push_back(std::move(chapter));
++      }
++      return OK;
++    }
++
++    case Picture:
++    case None:
++    default:
++      return FailedToExecute;
++  }
++}
++
+ int CPlayerOperations::GetActivePlayers()
+ {
+   const auto& components = CServiceBroker::GetAppComponents();
+diff --git a/xbmc/interfaces/json-rpc/PlayerOperations.h b/xbmc/interfaces/json-rpc/PlayerOperations.h
+index 0a53772..937bb42 100644
+--- a/xbmc/interfaces/json-rpc/PlayerOperations.h
++++ b/xbmc/interfaces/json-rpc/PlayerOperations.h
+@@ -85,6 +85,22 @@ namespace JSONRPC
+     static JSONRPC_STATUS AddSubtitle(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
+     static JSONRPC_STATUS SetSubtitle(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
+     static JSONRPC_STATUS SetVideoStream(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
++
++    static JSONRPC_STATUS GetVideoSettings(const std::string& method,
++                                           ITransportLayer* transport,
++                                           IClient* client,
++                                           const CVariant& parameterObject,
++                                           CVariant& result);
++    static JSONRPC_STATUS SetVideoSettings(const std::string& method,
++                                           ITransportLayer* transport,
++                                           IClient* client,
++                                           const CVariant& parameterObject,
++                                           CVariant& result);
++    static JSONRPC_STATUS GetChapters(const std::string& method,
++                                      ITransportLayer* transport,
++                                      IClient* client,
++                                      const CVariant& parameterObject,
++                                      CVariant& result);
+   private:
+     static int GetActivePlayers();
+     static PlayerType GetPlayer(const CVariant &player);
+diff --git a/xbmc/interfaces/json-rpc/schema/methods.json b/xbmc/interfaces/json-rpc/schema/methods.json
+index 19be352..122898d 100644
+--- a/xbmc/interfaces/json-rpc/schema/methods.json
++++ b/xbmc/interfaces/json-rpc/schema/methods.json
+@@ -1163,6 +1163,225 @@
+     ],
+     "returns": "string"
+   },
++  "Player.GetVideoSettings": {
++    "type": "method",
++    "description": "Get the video and audio settings of the current playback",
++    "transport": "Response",
++    "permission": "ReadData",
++    "params": [
++      {
++        "name": "playerid",
++        "$ref": "Player.Id",
++        "required": true
++      }
++    ],
++    "returns": {
++      "$ref": "Player.VideoSettings"
++    }
++  },
++  "Player.SetVideoSettings": {
++    "type": "method",
++    "description": "Change video and audio settings of the current playback like the video and audio settings dialogs do. Settings which are not given keep their value. Zoom, pixel ratio, vertical shift and nonlinear stretch select the custom view mode unless a view mode is given.",
++    "transport": "Response",
++    "permission": "ControlPlayback",
++    "params": [
++      {
++        "name": "playerid",
++        "$ref": "Player.Id",
++        "required": true
++      },
++      {
++        "name": "settings",
++        "type": "object",
++        "required": true,
++        "additionalProperties": false,
++        "properties": {
++          "brightness": {
++            "type": [
++              "null",
++              "number"
++            ],
++            "minimum": 0,
++            "maximum": 100,
++            "default": null
++          },
++          "contrast": {
++            "type": [
++              "null",
++              "number"
++            ],
++            "minimum": 0,
++            "maximum": 100,
++            "default": null
++          },
++          "gamma": {
++            "type": [
++              "null",
++              "number"
++            ],
++            "minimum": 0,
++            "maximum": 100,
++            "default": null
++          },
++          "sharpness": {
++            "type": [
++              "null",
++              "number"
++            ],
++            "minimum": -1,
++            "maximum": 1,
++            "default": null
++          },
++          "noisereduction": {
++            "type": [
++              "null",
++              "number"
++            ],
++            "minimum": 0,
++            "maximum": 1,
++            "default": null
++          },
++          "postprocess": {
++            "$ref": "Optional.Boolean"
++          },
++          "interlacemethod": {
++            "type": [
++              "null",
++              "integer"
++            ],
++            "minimum": 0,
++            "default": null,
++            "description": "One of the interlacemethods of Player.GetVideoSettings"
++          },
++          "scalingmethod": {
++            "type": [
++              "null",
++              "integer"
++            ],
++            "minimum": 0,
++            "default": null,
++            "description": "One of the scalingmethods of Player.GetVideoSettings"
++          },
++          "viewmode": {
++            "type": [
++              "null",
++              "integer"
++            ],
++            "minimum": 0,
++            "maximum": 9,
++            "default": null
++          },
++          "zoom": {
++            "type": [
++              "null",
++              "number"
++            ],
++            "minimum": 0.5,
++            "maximum": 2,
++            "default": null
++          },
++          "pixelratio": {
++            "type": [
++              "null",
++              "number"
++            ],
++            "minimum": 0.5,
++            "maximum": 2,
++            "default": null
++          },
++          "verticalshift": {
++            "type": [
++              "null",
++              "number"
++            ],
++            "minimum": -2,
++            "maximum": 2,
++            "default": null
++          },
++          "nonlinearstretch": {
++            "$ref": "Optional.Boolean"
++          },
++          "tonemapmethod": {
++            "type": [
++              "null",
++              "integer"
++            ],
++            "minimum": 0,
++            "maximum": 3,
++            "default": null
++          },
++          "tonemapparam": {
++            "type": [
++              "null",
++              "number"
++            ],
++            "minimum": 0.1,
++            "maximum": 5,
++            "default": null
++          },
++          "volumeamplification": {
++            "type": [
++              "null",
++              "number"
++            ],
++            "minimum": 0,
++            "maximum": 60,
++            "default": null,
++            "description": "Volume amplification in dB"
++          },
++          "centermixlevel": {
++            "type": [
++              "null",
++              "integer"
++            ],
++            "minimum": -10,
++            "maximum": 30,
++            "default": null,
++            "description": "Center mix level for downmixing in dB"
++          }
++        }
++      }
++    ],
++    "returns": {
++      "$ref": "Player.VideoSettings"
++    }
++  },
++  "Player.GetChapters": {
++    "type": "method",
++    "description": "Get the chapters of the current playback",
++    "transport": "Response",
++    "permission": "ReadData",
++    "params": [
++      {
++        "name": "playerid",
++        "$ref": "Player.Id",
++        "required": true
++      }
++    ],
++    "returns": {
++      "type": "array",
++      "items": {
++        "type": "object",
++        "properties": {
++          "index": {
++            "type": "integer",
++            "minimum": 1,
++            "required": true
++          },
++          "title": {
++            "type": "string",
++            "required": true
++          },
++          "time": {
++            "type": "number",
++            "minimum": 0,
++            "required": true,
++            "description": "Start of the chapter in seconds"
++          }
++        }
++      }
++    }
++  },
+   "Playlist.GetPlaylists": {
+     "type": "method",
+     "description": "Returns all existing playlists",
+diff --git a/xbmc/interfaces/json-rpc/schema/types.json b/xbmc/interfaces/json-rpc/schema/types.json
+index 4c67f7c..88c4bd4 100644
+--- a/xbmc/interfaces/json-rpc/schema/types.json
++++ b/xbmc/interfaces/json-rpc/schema/types.json
+@@ -725,6 +725,167 @@
+       }
+     }
+   },
++  "Player.VideoSettings": {
++    "type": "object",
++    "description": "Video and audio settings of the current playback, as in the video and audio settings dialogs",
++    "properties": {
++      "brightness": {
++        "type": "number",
++        "required": true,
++        "description": "0 to 100"
++      },
++      "contrast": {
++        "type": "number",
++        "required": true,
++        "description": "0 to 100"
++      },
++      "gamma": {
++        "type": "number",
++        "required": true,
++        "description": "0 to 100"
++      },
++      "sharpness": {
++        "type": "number",
++        "required": true,
++        "description": "-1 to 1"
++      },
++      "noisereduction": {
++        "type": "number",
++        "required": true,
++        "description": "0 to 1"
++      },
++      "postprocess": {
++        "type": "boolean",
++        "required": true
++      },
++      "interlacemethod": {
++        "type": "integer",
++        "required": true,
++        "description": "Deinterlacing method (EINTERLACEMETHOD)"
++      },
++      "scalingmethod": {
++        "type": "integer",
++        "required": true,
++        "description": "Scaling method (ESCALINGMETHOD)"
++      },
++      "viewmode": {
++        "type": "integer",
++        "required": true,
++        "description": "View mode (ViewMode): 0 normal, 1 zoom, 2 stretch 4:3, 3 wide zoom, 4 stretch 16:9, 5 original, 6 custom, 7 stretch 16:9 nonlinear, 8 zoom 120% width, 9 zoom 110% width"
++      },
++      "zoom": {
++        "type": "number",
++        "required": true,
++        "description": "Zoom of the custom view mode, 0.5 to 2"
++      },
++      "pixelratio": {
++        "type": "number",
++        "required": true,
++        "description": "Pixel ratio of the custom view mode, 0.5 to 2"
++      },
++      "verticalshift": {
++        "type": "number",
++        "required": true,
++        "description": "Vertical shift of the custom view mode, -2 to 2"
++      },
++      "nonlinearstretch": {
++        "type": "boolean",
++        "required": true,
++        "description": "Nonlinear stretch of the custom view mode"
++      },
++      "tonemapmethod": {
++        "type": "integer",
++        "required": true,
++        "description": "Tone mapping method (ETONEMAPMETHOD): 0 off, 1 Reinhard, 2 ACES, 3 Hable"
++      },
++      "tonemapparam": {
++        "type": "number",
++        "required": true,
++        "description": "0.1 to 5"
++      },
++      "volumeamplification": {
++        "type": "number",
++        "required": true,
++        "description": "Volume amplification in dB, 0 to 60"
++      },
++      "centermixlevel": {
++        "type": "integer",
++        "required": true,
++        "description": "Center mix level for downmixing in dB, -10 to 30"
++      },
++      "supports": {
++        "type": "object",
++        "required": true,
++        "description": "Renderer features available for the current video",
++        "properties": {
++          "brightness": {
++            "type": "boolean",
++            "required": true
++          },
++          "contrast": {
++            "type": "boolean",
++            "required": true
++          },
++          "gamma": {
++            "type": "boolean",
++            "required": true
++          },
++          "sharpness": {
++            "type": "boolean",
++            "required": true
++          },
++          "noise": {
++            "type": "boolean",
++            "required": true
++          },
++          "nonlinearstretch": {
++            "type": "boolean",
++            "required": true
++          },
++          "pixelratio": {
++            "type": "boolean",
++            "required": true
++          },
++          "zoom": {
++            "type": "boolean",
++            "required": true
++          },
++          "verticalshift": {
++            "type": "boolean",
++            "required": true
++          },
++          "tonemap": {
++            "type": "boolean",
++            "required": true
++          },
++          "stretch": {
++            "type": "boolean",
++            "required": true
++          },
++          "postprocess": {
++            "type": "boolean",
++            "required": true
++          }
++        }
++      },
++      "interlacemethods": {
++        "type": "array",
++        "required": true,
++        "items": {
++          "type": "integer"
++        },
++        "description": "Deinterlacing methods available for the current video"
++      },
++      "scalingmethods": {
++        "type": "array",
++        "required": true,
++        "items": {
++          "type": "integer"
++        },
++        "description": "Scaling methods available for the current video"
++      }
++    }
++  },
+   "Player.Property.Name": {
+     "type": "string",
+     "enum": [

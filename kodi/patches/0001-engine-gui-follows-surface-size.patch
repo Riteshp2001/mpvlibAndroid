@@ -1,0 +1,111 @@
+Headless engine mode: the GUI layer follows the size of its Surface.
+
+With KODI_ENGINE_MODE set (by mpvlib-kodi's KodiEngine), Kodi renders into Surfaces owned by
+the host application. Kodi normally keeps the GUI resolution of the first window it gets; here
+CAndroidUtils reports the current Surface size and a Surface size change updates the desktop
+resolution, so video and subtitles keep their aspect ratio when the host view is resized
+(rotation, split screen, picture in picture). kodi_engine_capabilities() lets the engine detect
+the patch.
+
+diff --git a/xbmc/platform/android/activity/XBMCApp.cpp b/xbmc/platform/android/activity/XBMCApp.cpp
+index 552d3ea..ff80fa1 100644
+--- a/xbmc/platform/android/activity/XBMCApp.cpp
++++ b/xbmc/platform/android/activity/XBMCApp.cpp
+@@ -1853,9 +1853,45 @@ void CXBMCApp::onDisplayRemoved(int displayId)
+   android_printf("%s: ", __PRETTY_FUNCTION__);
+ }
+ 
++// Lets a host application detect engine-mode support in libkodi.so.
++extern "C" __attribute__((visibility("default"))) int kodi_engine_capabilities()
++{
++  return 1; // bit 0: the GUI layer follows the size of its Surface
++}
++
++bool CXBMCApp::IsEngineMode()
++{
++  static const bool engine = getenv("KODI_ENGINE_MODE") != nullptr;
++  return engine;
++}
++
++void CXBMCApp::UpdateGuiResolutionCallback(void*)
++{
++  CWinSystemBase* winSystem = CServiceBroker::GetWinSystem();
++  if (!winSystem || !CXBMCApp::Get().m_window)
++    return;
++
++  // Re-probe: the desktop resolution is now the Surface size (see CAndroidUtils).
++  winSystem->UpdateResolutions();
++  CGraphicContext& gfx = winSystem->GetGfxContext();
++  gfx.SetVideoResolution(gfx.GetVideoResolution(), true);
++}
++
+ void CXBMCApp::surfaceChanged(CJNISurfaceHolder holder, int format, int width, int height)
+ {
+-  android_printf("%s: ", __PRETTY_FUNCTION__);
++  android_printf("%s: %dx%d", __PRETTY_FUNCTION__, width, height);
++  if (!IsEngineMode() || width <= 0 || height <= 0)
++    return;
++
++  const bool resized = width != m_surfaceWidth || height != m_surfaceHeight;
++  m_surfaceWidth = width;
++  m_surfaceHeight = height;
++  if (resized && m_window && !m_firstrun && g_application.IsInitialized())
++  {
++    static KODI::MESSAGING::ThreadMessageCallback callback{UpdateGuiResolutionCallback, nullptr};
++    CServiceBroker::GetAppMessenger()->PostMsg(TMSG_CALLBACK, -1, -1,
++                                               static_cast<void*>(&callback));
++  }
+ }
+ 
+ void CXBMCApp::surfaceCreated(CJNISurfaceHolder holder)
+diff --git a/xbmc/platform/android/activity/XBMCApp.h b/xbmc/platform/android/activity/XBMCApp.h
+index 6c26e44..40adb4b 100644
+--- a/xbmc/platform/android/activity/XBMCApp.h
++++ b/xbmc/platform/android/activity/XBMCApp.h
+@@ -156,6 +156,14 @@ public:
+   void KeepScreenOn(bool on);
+   bool HasFocus() const { return m_hasFocus; }
+ 
++  /*!
++   * \brief Whether Kodi runs as a headless engine inside another application (environment
++   * variable KODI_ENGINE_MODE). The GUI layer then follows the size of the Surface it renders to.
++   */
++  static bool IsEngineMode();
++  int GetSurfaceWidth() const { return m_surfaceWidth; }
++  int GetSurfaceHeight() const { return m_surfaceHeight; }
++
+   static bool StartActivity(const std::string& package,
+                             const std::string& intent = std::string(),
+                             const std::string& dataType = std::string(),
+@@ -273,6 +281,9 @@ private:
+   mutable std::vector<androidPackage> m_applications;
+ 
+   std::shared_ptr<CNativeWindow> m_window;
++  std::atomic<int> m_surfaceWidth{0};
++  std::atomic<int> m_surfaceHeight{0};
++  static void UpdateGuiResolutionCallback(void*);
+ 
+   CVideoSyncAndroid* m_syncImpl{nullptr};
+   CEvent m_vsyncEvent;
+diff --git a/xbmc/windowing/android/AndroidUtils.cpp b/xbmc/windowing/android/AndroidUtils.cpp
+index 6b3cdf8..c89c77b 100644
+--- a/xbmc/windowing/android/AndroidUtils.cpp
++++ b/xbmc/windowing/android/AndroidUtils.cpp
+@@ -217,7 +217,16 @@ bool CAndroidUtils::GetNativeResolution(RESOLUTION_INFO* res) const
+   if (!nativeWindow)
+     return false;
+ 
+-  if (!m_width || !m_height)
++  if (CXBMCApp::IsEngineMode())
++  {
++    // Headless engine: the GUI layer follows the host's Surface, not the display.
++    const int width = CXBMCApp::Get().GetSurfaceWidth();
++    const int height = CXBMCApp::Get().GetSurfaceHeight();
++    m_width = width > 0 ? width : nativeWindow->GetWidth();
++    m_height = height > 0 ? height : nativeWindow->GetHeight();
++    CLog::Log(LOGINFO, "CAndroidUtils: engine surface resolution: {}x{}", m_width, m_height);
++  }
++  else if (!m_width || !m_height)
+   {
+     m_width = nativeWindow->GetWidth();
+     m_height = nativeWindow->GetHeight();

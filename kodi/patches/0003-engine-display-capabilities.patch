@@ -1,0 +1,206 @@
+Headless engine mode: Kodi sees the real display.
+
+With KODI_ENGINE_MODE set, Kodi's window is a Dialog window that is never attached, so its decor
+view has no Display: Kodi saw no HDR capabilities, no display modes and a 60 Hz refresh rate.
+CAndroidUtils now falls back to the default display (WindowManager.getDefaultDisplay()) for HDR
+capabilities, display modes and the refresh rate. The display mode belongs to the window of the
+host application: in engine mode CXBMCApp::SetDisplayMode() and SetRefreshRate() only log (Kodi
+used to wait 5 s at startup for a display change that never came), and the only resolution Kodi
+offers is the current display mode at the size of the Surface it renders to (see 0001).
+
+diff --git a/xbmc/platform/android/activity/XBMCApp.cpp b/xbmc/platform/android/activity/XBMCApp.cpp
+index 566a78a..56c22af 100644
+--- a/xbmc/platform/android/activity/XBMCApp.cpp
++++ b/xbmc/platform/android/activity/XBMCApp.cpp
+@@ -752,6 +752,14 @@ void CXBMCApp::SetRefreshRate(float rate)
+   if (rate < 1.0f)
+     return;
+ 
++  // A headless engine renders into Surfaces of the host application, whose window owns the display
++  // mode. Kodi's window is never attached: a change would only wait for a display change.
++  if (IsEngineMode())
++  {
++    CLog::Log(LOGINFO, "CXBMCApp: engine mode, refresh rate {:f} not applied", rate);
++    return;
++  }
++
+   CJNIWindow window = getWindow();
+   if (window)
+   {
+@@ -776,6 +784,12 @@ void CXBMCApp::SetDisplayMode(int mode, float rate)
+   if (mode < 1.0)
+     return;
+ 
++  if (IsEngineMode())
++  {
++    CLog::Log(LOGINFO, "CXBMCApp: engine mode, display mode {} ({:f} Hz) not applied", mode, rate);
++    return;
++  }
++
+   CJNIWindow window = getWindow();
+   if (window)
+   {
+diff --git a/xbmc/windowing/android/AndroidUtils.cpp b/xbmc/windowing/android/AndroidUtils.cpp
+index c89c77b..e526db2 100644
+--- a/xbmc/windowing/android/AndroidUtils.cpp
++++ b/xbmc/windowing/android/AndroidUtils.cpp
+@@ -30,6 +30,33 @@ static bool s_hasModeApi = false;
+ static std::vector<RESOLUTION_INFO> s_res_displayModes;
+ static RESOLUTION_INFO s_res_cur_displayMode;
+ 
++// The display of Kodi's window. A headless engine (KODI_ENGINE_MODE) renders into Surfaces of the
++// host application; its window is never attached and has no display, so the default display is
++// used instead.
++static CJNIDisplay getDisplay()
++{
++  CJNIWindow window = CXBMCApp::getWindow();
++  if (window)
++  {
++    CJNIView view = window.getDecorView();
++    if (view)
++    {
++      CJNIDisplay display = view.getDisplay();
++      if (display)
++        return display;
++    }
++  }
++
++  if (CXBMCApp::IsEngineMode())
++  {
++    CJNIWindowManager windowManager = CXBMCApp::getWindowManager();
++    if (windowManager)
++      return windowManager.getDefaultDisplay();
++  }
++
++  return CJNIDisplay(jni::jhobject());
++}
++
+ static float currentRefreshRate()
+ {
+   if (s_hasModeApi)
+@@ -44,18 +71,14 @@ static float currentRefreshRate()
+       CLog::Log(LOGINFO, "CAndroidUtils: Preferred refresh rate: {:f}", preferredRate);
+       return preferredRate;
+     }
+-    CJNIView view(window.getDecorView());
+-    if (view)
++    CJNIDisplay display = getDisplay();
++    if (display)
+     {
+-      CJNIDisplay display(view.getDisplay());
+-      if (display)
++      float reportedRate = display.getRefreshRate();
++      if (reportedRate > 20.0f)
+       {
+-        float reportedRate = display.getRefreshRate();
+-        if (reportedRate > 20.0f)
+-        {
+-          CLog::Log(LOGINFO, "CAndroidUtils: Current display refresh rate: {:f}", reportedRate);
+-          return reportedRate;
+-        }
++        CLog::Log(LOGINFO, "CAndroidUtils: Current display refresh rate: {:f}", reportedRate);
++        return reportedRate;
+       }
+     }
+   }
+@@ -68,7 +91,7 @@ static void fetchDisplayModes()
+   s_hasModeApi = false;
+   s_res_displayModes.clear();
+ 
+-  CJNIDisplay display = CXBMCApp::getWindow().getDecorView().getDisplay();
++  CJNIDisplay display = getDisplay();
+ 
+   if (display)
+   {
+@@ -238,6 +261,12 @@ bool CAndroidUtils::GetNativeResolution(RESOLUTION_INFO* res) const
+     *res = s_res_cur_displayMode;
+     res->iWidth = m_width;
+     res->iHeight = m_height;
++    if (CXBMCApp::IsEngineMode())
++    {
++      // The Surface is the screen; the display mode only provides the refresh rate.
++      res->iScreenWidth = m_width;
++      res->iScreenHeight = m_height;
++    }
+   }
+   else
+   {
+@@ -268,7 +297,9 @@ bool CAndroidUtils::SetNativeResolution(const RESOLUTION_INFO& res)
+   if (s_hasModeApi)
+   {
+     CXBMCApp::Get().SetDisplayMode(std::atoi(res.strId.c_str()), res.fRefreshRate);
+-    s_res_cur_displayMode = res;
++    // A headless engine leaves the display mode unchanged (see CXBMCApp::SetDisplayMode).
++    if (!CXBMCApp::IsEngineMode())
++      s_res_cur_displayMode = res;
+   }
+   else
+     CXBMCApp::Get().SetRefreshRate(res.fRefreshRate);
+@@ -285,6 +316,16 @@ bool CAndroidUtils::ProbeResolutions(std::vector<RESOLUTION_INFO>& resolutions)
+ 
+   CLog::Log(LOGDEBUG, "CAndroidUtils: ProbeResolutions: {}x{}", m_width, m_height);
+ 
++  if (CXBMCApp::IsEngineMode())
++  {
++    // A headless engine renders to the host's Surface and does not change the display mode: the
++    // current mode of the display, at the size of the Surface, is the only resolution.
++    if (!ret || cur_res.iWidth <= 1 || cur_res.iHeight <= 1)
++      return false;
++    resolutions.push_back(cur_res);
++    return true;
++  }
++
+   if (s_hasModeApi)
+   {
+     for (RESOLUTION_INFO res : s_res_displayModes)
+@@ -349,19 +390,12 @@ bool CAndroidUtils::UpdateDisplayModes()
+ 
+ bool CAndroidUtils::IsHDRDisplay()
+ {
+-  CJNIWindow window = CXBMCApp::getWindow();
+   bool ret = false;
+ 
+-  if (window)
+-  {
+-    CJNIView view = window.getDecorView();
+-    if (view)
+-    {
+-      CJNIDisplay display = view.getDisplay();
+-      if (display)
+-        ret = display.isHdr();
+-    }
+-  }
++  CJNIDisplay display = getDisplay();
++  if (display)
++    ret = display.isHdr();
++
+   CLog::Log(LOGDEBUG, "CAndroidUtils: IsHDRDisplay: {}", ret ? "true" : "false");
+   return ret;
+ }
+@@ -376,21 +410,12 @@ void CAndroidUtils::OnSettingChanged(const std::shared_ptr<const CSetting>& sett
+ 
+ std::vector<int> CAndroidUtils::GetDisplaySupportedHdrTypes()
+ {
+-  CJNIWindow window = CXBMCApp::getWindow();
+-
+-  if (window)
++  CJNIDisplay display = getDisplay();
++  if (display)
+   {
+-    CJNIView view = window.getDecorView();
+-    if (view)
+-    {
+-      CJNIDisplay display = view.getDisplay();
+-      if (display)
+-      {
+-        CJNIDisplayHdrCapabilities caps = display.getHdrCapabilities();
+-        if (caps)
+-          return caps.getSupportedHdrTypes();
+-      }
+-    }
++    CJNIDisplayHdrCapabilities caps = display.getHdrCapabilities();
++    if (caps)
++      return caps.getSupportedHdrTypes();
+   }
+ 
+   return {};

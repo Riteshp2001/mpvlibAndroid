@@ -1,0 +1,33 @@
+Headless engine mode: the host application owns the audio focus.
+
+Kodi requests the audio focus whenever playback starts or resumes, and abandons it on pause and
+stop. A host application running Kodi as its playback engine (KODI_ENGINE_MODE) requests the
+focus itself and pauses Kodi when it loses it; Kodi's own requests would take the focus away
+from the host and make it pause playback.
+
+diff --git a/xbmc/platform/android/activity/XBMCApp.cpp b/xbmc/platform/android/activity/XBMCApp.cpp
+index ff80fa1..566a78a 100644
+--- a/xbmc/platform/android/activity/XBMCApp.cpp
++++ b/xbmc/platform/android/activity/XBMCApp.cpp
+@@ -568,6 +568,11 @@ void CXBMCApp::KeepScreenOn(bool on)
+ 
+ bool CXBMCApp::AcquireAudioFocus()
+ {
++  // A host application running Kodi as its playback engine owns the audio focus and pauses Kodi
++  // itself. A request from Kodi would take the focus away from the host.
++  if (IsEngineMode())
++    return true;
++
+   CJNIAudioManager audioManager(getSystemService(CJNIContext::AUDIO_SERVICE));
+ 
+   int result;
+@@ -607,6 +612,9 @@ bool CXBMCApp::AcquireAudioFocus()
+ 
+ bool CXBMCApp::ReleaseAudioFocus()
+ {
++  if (IsEngineMode())
++    return true;
++
+   CJNIAudioManager audioManager(getSystemService(CJNIContext::AUDIO_SERVICE));
+   int result;
+ 
